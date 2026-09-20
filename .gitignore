@@ -1,0 +1,21 @@
+node_modules/
+.wrangler/
+dist/
+.dev.vars
+.env*
+*.log
+*.pem
+.DS_Store
+
+# Account-specific config (holds D1/KV ids and proxy hosts); see wrangler.example.jsonc
+wrangler.jsonc
+
+# Generated seeds may contain real account numbers; only the example is committed
+seeds/*.sql
+!seeds/accounts.example.sql
+
+# Per-account credentials and cached tokens
+.kis-credentials.json
+.kiwoom-credentials.json
+.kis-token-cache.json
+.kiwoom-token-cache.json

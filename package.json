@@ -1,0 +1,29 @@
+{
+  "name": "asset-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "cf-typegen": "wrangler types",
+    "kis:accounts": "tsx scripts/kis-accounts.ts",
+    "kis:secret:put": "wrangler secret put KIS_CREDENTIALS < .kis-credentials.json",
+    "kiwoom:accounts": "tsx scripts/kiwoom-accounts.ts",
+    "kiwoom:secret:put": "wrangler secret put KIWOOM_CREDENTIALS < .kiwoom-credentials.json",
+    "db:migrate:local": "wrangler d1 migrations apply asset-tracker-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply asset-tracker-db --remote",
+    "db:seed:local": "wrangler d1 execute asset-tracker-db --local --file=./seeds/accounts.sql",
+    "db:seed:remote": "wrangler d1 execute asset-tracker-db --remote --file=./seeds/accounts.sql"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260919.1",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1",
+    "wrangler": "^4.135.0"
+  }
+}

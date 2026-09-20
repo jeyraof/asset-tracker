@@ -1,0 +1,31 @@
+# Copy to .dev.vars for `wrangler dev` and the local scripts (never commit).
+# `wrangler secret put` only affects the deployed Worker; local runs read this file.
+
+# Per-account KIS credentials as a single-line JSON object keyed by account
+# external id (CANO-PRDT). This is the primary credential source.
+KIS_CREDENTIALS='{"12345678-01":{"appkey":"your-app-key","appsecret":"your-app-secret"}}'
+
+# KIS environment: prod (real) or vts (paper).
+KIS_ENV="prod"
+
+# Shared secret required by POST /sync, /accounts, /runs (x-admin-token header).
+ADMIN_TOKEN="change-me"
+
+# Optional: default accounts for `npm run kis:accounts` when no --accounts flag.
+# KIS_ACCOUNTS="12345678-01"
+
+# Per-account Kiwoom credentials as a single-line JSON object keyed by account id.
+# KIWOOM_CREDENTIALS='{"12345678":{"appkey":"your-app-key","appsecret":"your-app-secret"}}'
+
+# Kiwoom environment: prod (real) or mock (paper).
+# KIWOOM_ENV="prod"
+
+# Base URL the Worker calls. Point at the Caddy reverse-proxy vhost so requests
+# egress from the IP-whitelisted host (see deploy/caddy/kiwoom.caddy).
+# KIWOOM_BASE_URL="https://kiwoom.proxy.example.com"
+
+# Shared secret sent as the X-Kiwoom-Relay header to the reverse proxy.
+# KIWOOM_RELAY_SECRET="change-me"
+
+# Optional: default accounts for `npm run kiwoom:accounts` when no flags are given.
+# KIWOOM_ACCOUNTS="12345678"

@@ -1,0 +1,35 @@
+# Kiwoom reverse proxy for asset-tracker (Caddy).
+#
+# The Worker calls this vhost over HTTPS; Caddy forwards to https://api.kiwoom.com
+# over TLS using THIS host's (IP-whitelisted) source address. No CONNECT tunnel is
+# used, so it is unaffected by the Cloudflare Workers startTls/SNI bug (workerd #6903).
+#
+# Install:
+#   sudo mkdir -p /etc/caddy/conf.d
+#   # /etc/caddy/Caddyfile must contain:  import /etc/caddy/conf.d/*.caddy
+#   sudo cp deploy/caddy/kiwoom.caddy /etc/caddy/conf.d/kiwoom.caddy
+#   sudo systemctl reload caddy
+#
+# DNS: kiwoom.proxy.example.com is an A record to this VPS (DNS-only), so Caddy
+# obtains and renews a public certificate automatically (ports 80 and 443 open).
+# Add a sibling file per broker; the import glob picks them all up.
+#
+# Replace <RELAY_SECRET> with the value in the Worker's KIWOOM_RELAY_SECRET.
+
+kiwoom.proxy.example.com {
+	@relay header X-Kiwoom-Relay "<RELAY_SECRET>"
+
+	handle @relay {
+		reverse_proxy https://api.kiwoom.com {
+			header_up Host api.kiwoom.com
+			header_up -X-Kiwoom-Relay
+			header_up -X-Forwarded-For
+			header_up -X-Forwarded-Proto
+			header_up -X-Forwarded-Host
+		}
+	}
+
+	handle {
+		respond "forbidden" 403
+	}
+}

@@ -1,0 +1,37 @@
+// Copy to `wrangler.jsonc` and fill in your own account-specific values.
+// `wrangler.jsonc` is gitignored so ids and proxy hosts stay out of git.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "asset-tracker",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-01",
+  "observability": {
+    "enabled": true
+  },
+  "triggers": {
+    // KST Mon-Fri 01:00 = UTC Sun-Thu 16:00.
+    // Cloudflare weekdays: 1=Sunday ... 7=Saturday, so Sun-Thu is 1-5.
+    "crons": ["0 16 * * 1-5"]
+  },
+  "vars": {
+    "KIS_ENV": "prod",
+    "KIS_BASE_URL": "https://openapi.koreainvestment.com:9443",
+    "KIWOOM_ENV": "prod",
+    // Caddy reverse-proxy vhost on your IP-whitelisted VPS (see deploy/caddy/).
+    "KIWOOM_BASE_URL": "https://kiwoom.proxy.example.com"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "asset-tracker-db",
+      "database_id": "<d1-database-id>",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "<kv-namespace-id>"
+    }
+  ]
+}
