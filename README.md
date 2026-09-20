@@ -89,6 +89,10 @@ appkey/appsecret**이 필요하므로, 이를 `KIS_CREDENTIALS` secret(계좌 ex
   실패가 보유 스냅샷에 영향을 주지 않는다.
 - **기준일 KST**: 보유 스냅샷은 ET 세션 날짜를 쓰지만, 환율은 한국 고시 기준에 맞춰
   **KST 날짜**로 기록한다.
+- 참고: 환율의 `date`는 그 실행에서 환율을 조회한 KST 날짜(레코드의 기준일)이며,
+  환율 API 응답이 준 날짜가 아니다. US 크론은 KST 이른 아침(07:00)에 돌아 ET 세션보다
+  하루 뒤이므로, 미국 보유와 환율을 함께 계산할 때는 이 하루 차이를 염두에 둔다
+  (정확한 관측 시각은 `fx_rates.created_at`(UTC)에 남는다).
 - **출처/저장**: 키움 환율 조회 `ust31301`(`/api/us/exchange`, body `exch_tp=2`
   = USD→KRW) → `fx_rates` (`base_currency`, `quote_currency`, `date`, `rate`,
   `provider`, `source`, `raw_json`; `UNIQUE (base, quote, date)`). 응답은

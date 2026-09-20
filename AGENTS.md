@@ -60,6 +60,10 @@ Always run `pnpm test` and `pnpm typecheck` after changes.
   failure never affects the holdings snapshot). A provider opts in by implementing
   the optional `BrokerProvider.getFxRate`; providers without it (KIS) are skipped.
   Keep FX provider-agnostic: no TR_IDs or broker field names outside `providers/`.
+  Note: `fx_rates.date` is the KST date the rate was observed (not a date from the
+  response, which carries none), while US snapshots are keyed to the ET session
+  date; the US cron runs KST morning, so the two are a day apart — worth keeping in
+  mind when valuing US holdings with FX (`created_at` holds the exact UTC instant).
 
 ## Conventions
 
