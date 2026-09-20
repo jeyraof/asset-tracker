@@ -51,7 +51,7 @@ Always run `pnpm test` and `pnpm typecheck` after changes.
   `tradesEnabled` in `src/sync/orchestrator.ts`), so provider-agnostic code never
   hardcodes a broker's unsupported-endpoint error.
 - Scheduled runs are split by account product (`productOf` / `SyncOptions.products`):
-  the KRX run (`stock`+`gold`) fires at KST 01:00, and the US run (`us`) fires at
+  the KRX run (`stock`+`gold`) fires at KST 20:30, and the US run (`us`) fires at
   KST 07:00 after the US regular close. `src/index.ts` picks the date/`products`
   from `controller.cron`; the US run uses the **ET** session date (`etDate`), not KST.
 

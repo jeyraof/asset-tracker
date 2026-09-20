@@ -10,7 +10,7 @@ const MAX_LOOKBACK_DAYS = 90;
 
 /**
  * US accounts run separately after the US regular session closes: UTC Mon-Fri
- * 22:00 = KST Tue-Sat 07:00. The KRX run stays at UTC Sun-Thu 16:00 (KST 01:00).
+ * 22:00 = KST Tue-Sat 07:00. The KRX run stays at UTC Mon-Fri 11:30 (KST 20:30).
  */
 const US_CRON = "0 22 * * 2-6";
 const KRX_PRODUCTS = ["stock", "gold"] as const;

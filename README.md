@@ -76,7 +76,7 @@ appkey/appsecret**이 필요하므로, 이를 `KIS_CREDENTIALS` secret(계좌 ex
   `deal_qty`에만 소수점으로 내려오고, 소수점 *가치*는 집계(`ust21120`/`ust21121`/`ust21131`/
   `ust21132`)에 포함돼 `ust21070` 합계보다 크다(관측 4063.72 vs 4247.50 USD). 키움 REST가
   소수점 잔고를 지원하면 `mapUsHolding`/`ust21070` 파싱만 확장하면 된다(`quantity`는 REAL).
-- **스케줄 분리**: KRX/금현물은 KST 01:00(UTC Sun–Thu 16:00), 미국은 KST 07:00
+- **스케줄 분리**: KRX/금현물은 KST 20:30(UTC Mon–Fri 11:30), 미국은 KST 07:00
   (UTC Mon–Fri 22:00, `0 22 * * 2-6`)에 별도 실행. US 실행은 ET 세션 날짜(`etDate`)를 쓴다.
 - US 티커는 `stripSymbol`을 태우지 않는다(7자 `A/J/Q` 티커 손상 방지).
 - `pnpm test` 88 passed, `pnpm typecheck` 통과.
@@ -178,9 +178,9 @@ It wires:
 - Worker: `asset-tracker`
 - D1: `asset-tracker-db` (binding `DB`) — `<d1-database-id>`
 - KV: `asset-tracker-kv` (binding `CACHE`) — `<kv-namespace-id>`
-- Cron: `0 16 * * 1-5` (UTC Sun-Thu 16:00 = KST Mon-Fri 01:00) for KRX/gold, and
+- Cron: `30 11 * * 2-6` (UTC Mon-Fri 11:30 = KST Mon-Fri 20:30) for KRX/gold, and
   `0 22 * * 2-6` (UTC Mon-Fri 22:00 = KST Tue-Sat 07:00) for US. Cloudflare uses
-  Quartz weekdays: 1=Sunday … 7=Saturday, so Sun-Thu is `1-5` and Mon-Fri is `2-6`.
+  Quartz weekdays: 1=Sunday … 7=Saturday, so Mon-Fri is `2-6`.
 
 ## Setup
 
