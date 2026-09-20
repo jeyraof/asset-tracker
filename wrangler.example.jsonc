@@ -9,9 +9,10 @@
     "enabled": true
   },
   "triggers": {
-    // KST Mon-Fri 01:00 = UTC Sun-Thu 16:00.
-    // Cloudflare weekdays: 1=Sunday ... 7=Saturday, so Sun-Thu is 1-5.
-    "crons": ["0 16 * * 1-5"]
+    // KRX run: KST Mon-Fri 01:00 = UTC Sun-Thu 16:00.
+    // US run: KST Tue-Sat 07:00 (after the US regular close) = UTC Mon-Fri 22:00.
+    // Cloudflare weekdays: 1=Sunday ... 7=Saturday, so Sun-Thu is 1-5, Mon-Fri is 2-6.
+    "crons": ["0 16 * * 1-5", "0 22 * * 2-6"]
   },
   "vars": {
     "KIS_ENV": "prod",

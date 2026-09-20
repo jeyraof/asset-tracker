@@ -1,6 +1,7 @@
 import type { Env } from "../../env";
 import { addDays, toCompactDate } from "../../lib/dates";
 import { logger } from "../../lib/logger";
+import { str } from "../../lib/parse";
 import { RateLimiter } from "../../lib/rateLimit";
 import type {
   AccountConfig,
@@ -36,6 +37,7 @@ import {
   mapDomesticTrades,
 } from "./endpoints/domestic";
 import { mapGoldBalance, mapGoldDailyQuotes, mapGoldTrades } from "./endpoints/gold";
+import { US, isUsExchange, mapUsBalance, mapUsDailyQuotes, mapUsTrades } from "./endpoints/us";
 import type {
   KiwoomBalanceResponse,
   KiwoomDailyChartResponse,
@@ -46,6 +48,11 @@ import type {
   KiwoomGoldTradeHistoryResponse,
   KiwoomHoldingRaw,
   KiwoomTradeHistoryResponse,
+  KiwoomUsBalanceResponse,
+  KiwoomUsDailyChartResponse,
+  KiwoomUsExchangeResponse,
+  KiwoomUsHoldingRaw,
+  KiwoomUsTradeHistoryResponse,
 } from "./types";
 
 /** Minimum gap between Kiwoom calls (limit is ~20 TPS; stay conservative). */
@@ -75,11 +82,15 @@ export class KiwoomProvider implements BrokerProvider {
   private readonly clients = new Map<string, KiwoomClient>();
   /** First account credential seen, reused for account-less market data calls. */
   private quoteCredentials?: KiwoomCredentials;
+  /** Resolved US exchange (ND/NY/NA) per ticker, shared across accounts. */
+  private readonly usExchangeBySymbol = new Map<string, string>();
+  /** Cached US daily candles per `${symbol}:${date}`, shared with quotes. */
+  private readonly usCandlesBySymbol = new Map<string, DailyQuote[]>();
 
   constructor(private readonly deps: KiwoomProviderDeps) {}
 
   supportsMarket(market: string): boolean {
-    return market === KRX || market === KRX_GOLD;
+    return market === KRX || market === KRX_GOLD || market === US;
   }
 
   private resolveCredentials(account: AccountConfig): KiwoomCredentials {
@@ -124,6 +135,10 @@ export class KiwoomProvider implements BrokerProvider {
 
   async getBalance(account: AccountConfig, date: string): Promise<BalanceResult> {
     const client = this.clientFor(account);
+
+    if (isUsAccount(account)) {
+      return this.usBalance(client, date);
+    }
 
     if (isGoldAccount(account)) {
       const holdings: KiwoomGoldHoldingRaw[] = [];
@@ -173,12 +188,125 @@ export class KiwoomProvider implements BrokerProvider {
     return mapDomesticBalance(balance, deposit, date);
   }
 
+  /**
+   * US balance (ust21070) re-valued at the regular-session close. The US market
+   * is closed when this runs (KST morning), but after-hours trade may still be
+   * printing, so each holding is pinned to the official close from usa06012.
+   */
+  private async usBalance(client: KiwoomClient, date: string): Promise<BalanceResult> {
+    const holdings: KiwoomUsHoldingRaw[] = [];
+    let body: KiwoomUsBalanceResponse = {};
+    let isFirstPage = true;
+
+    for await (const page of client.paginate<KiwoomUsBalanceResponse>(
+      KIWOOM_API_IDS.usBalance,
+      KIWOOM_PATHS.usAccount,
+      {},
+    )) {
+      if (isFirstPage) {
+        body = page;
+        isFirstPage = false;
+      }
+      holdings.push(...(page.result_list ?? []));
+    }
+    body = { ...body, result_list: holdings };
+
+    const closeBySymbol = new Map<string, number>();
+    for (const raw of holdings) {
+      const symbol = str(raw.stk_cd);
+      if (!symbol || closeBySymbol.has(symbol)) continue;
+      const candles = await this.fetchUsCandles(client, symbol, date);
+      const close = candles.find((quote) => quote.date === date)?.close ?? null;
+      if (close !== null) closeBySymbol.set(symbol, close);
+    }
+
+    return mapUsBalance(body, date, (symbol) => closeBySymbol.get(symbol) ?? null);
+  }
+
+  /** Resolves the exchange (ND/NY/NA) required by the US chart/quotes APIs. */
+  private async resolveUsExchange(client: KiwoomClient, symbol: string): Promise<string | null> {
+    const cached = this.usExchangeBySymbol.get(symbol);
+    if (cached) return cached;
+
+    try {
+      const response = await client.request<KiwoomUsExchangeResponse>(
+        KIWOOM_API_IDS.usExchange,
+        KIWOOM_PATHS.usStockInfo,
+        { stk_cd: symbol },
+      );
+      const exchange = str(response.body.list?.[0]?.stex_tp);
+      if (isUsExchange(exchange)) {
+        this.usExchangeBySymbol.set(symbol, exchange);
+        return exchange;
+      }
+    } catch (error) {
+      logger.warn("failed to resolve kiwoom US exchange", {
+        symbol,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return null;
+  }
+
+  /** Fetches US daily candles for the lookback window, cached across callers. */
+  private async fetchUsCandles(
+    client: KiwoomClient,
+    symbol: string,
+    date: string,
+  ): Promise<DailyQuote[]> {
+    const cacheKey = `${symbol}:${date}`;
+    const cached = this.usCandlesBySymbol.get(cacheKey);
+    if (cached) return cached;
+
+    const exchange = await this.resolveUsExchange(client, symbol);
+    if (!exchange) return [];
+
+    const from = addDays(date, -(QUOTE_LOOKBACK_DAYS - 1));
+    const quotes: DailyQuote[] = [];
+
+    for await (const page of client.paginate<KiwoomUsDailyChartResponse>(
+      KIWOOM_API_IDS.usDailyChart,
+      KIWOOM_PATHS.usChart,
+      {
+        stex_tp: exchange,
+        stk_cd: symbol,
+        // `strt_dt` is an inclusive base date: candles come back descending
+        // from it, so anchor on `date` (not the window start) and filter below.
+        strt_dt: toCompactDate(date),
+        upd_stkpc_tp: "0",
+        exrt_appl_tp: "0",
+      },
+      2,
+    )) {
+      quotes.push(...mapUsDailyQuotes(page, symbol));
+    }
+
+    const filtered = quotes.filter((quote) => quote.date >= from && quote.date <= date);
+    this.usCandlesBySymbol.set(cacheKey, filtered);
+    return filtered;
+  }
+
   async getTrades(account: AccountConfig, from: string, to: string): Promise<TradeFill[]> {
     const client = this.clientFor(account);
     const fills: TradeFill[] = [];
 
     try {
-      if (isGoldAccount(account)) {
+      if (isUsAccount(account)) {
+        for await (const page of client.paginate<KiwoomUsTradeHistoryResponse>(
+          KIWOOM_API_IDS.usTradeHistory,
+          KIWOOM_PATHS.usAccount,
+          {
+            strt_dt: toCompactDate(from),
+            end_dt: toCompactDate(to),
+            tp: "3",
+            stex_tp: "",
+            stk_cd: "",
+            krw_repl_skip_yn: "N",
+          },
+        )) {
+          fills.push(...mapUsTrades(page));
+        }
+      } else if (isGoldAccount(account)) {
         for await (const page of client.paginate<KiwoomGoldTradeHistoryResponse>(
           KIWOOM_API_IDS.goldTradeHistory,
           KIWOOM_PATHS.account,
@@ -222,6 +350,11 @@ export class KiwoomProvider implements BrokerProvider {
     for (const instrument of instruments) {
       if (!this.supportsMarket(instrument.market)) continue;
       try {
+        if (instrument.market === US) {
+          quotes.push(...(await this.fetchUsCandles(client, instrument.symbol, date)));
+          continue;
+        }
+
         if (instrument.market === KRX_GOLD) {
           for await (const page of client.paginate<KiwoomGoldDailyChartResponse>(
             KIWOOM_API_IDS.goldDailyChart,
@@ -266,6 +399,11 @@ export class KiwoomProvider implements BrokerProvider {
 /** Gold-spot (금현물) accounts use a different set of endpoints. */
 export function isGoldAccount(account: Pick<AccountConfig, "meta">): boolean {
   return account.meta?.["product"] === "gold";
+}
+
+/** US (미국주식) accounts use the `/api/us/*` endpoints and USD. */
+export function isUsAccount(account: Pick<AccountConfig, "meta">): boolean {
+  return account.meta?.["product"] === "us";
 }
 
 export function createKiwoomProvider(env: Env): BrokerProvider {

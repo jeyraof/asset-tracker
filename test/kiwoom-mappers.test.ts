@@ -6,6 +6,7 @@ import {
   stripSymbol,
 } from "../src/providers/kiwoom/endpoints/domestic";
 import { mapGoldBalance, mapGoldDailyQuotes, mapGoldTrades } from "../src/providers/kiwoom/endpoints/gold";
+import { mapUsBalance, mapUsDailyQuotes, mapUsTrades } from "../src/providers/kiwoom/endpoints/us";
 
 describe("stripSymbol", () => {
   it("removes the security-type prefix", () => {
@@ -271,5 +272,150 @@ describe("gold-spot mappers", () => {
       amount: 140000,
       orderTime: "13:20:37",
     });
+  });
+});
+
+describe("US mappers", () => {
+  const balanceBody = {
+    crnc_code: "USD",
+    tot_evlt_amt: "108719.8000",
+    tot_prch_amt: "111453.3212",
+    tot_pl_amt: "-3283.9512",
+    result_list: [
+      {
+        stex_nm: "미국",
+        crnc_code: "USD",
+        stk_cd: "AAPL",
+        frgn_stk_nm: "애플",
+        poss_qty: "000000000395",
+        frgn_stk_book_uv: "282.1603",
+        frgn_stk_book_amt: "111453.3212",
+        now_pric: "275.2400",
+        evlt_amt: "108719.8000",
+        pl_amt: "-3283.9512",
+        pl_rt: "-2.94",
+        exch_rate: "1524.50",
+      },
+    ],
+  };
+
+  it("maps US holdings with USD and a plain ticker", () => {
+    const result = mapUsBalance(balanceBody, "2026-09-20");
+
+    expect(result.summary.currency).toBe("USD");
+    expect(result.holdings[0]).toMatchObject({
+      market: "US",
+      symbol: "AAPL",
+      productName: "애플",
+      currency: "USD",
+      quantity: 395,
+      avgPrice: 282.1603,
+      purchaseAmount: 111453.3212,
+      currentPrice: 275.24,
+      evalAmount: 108719.8,
+      evalPflsAmount: -3283.9512,
+      evalPflsRate: -2.94,
+    });
+  });
+
+  it("re-values holdings at the regular-session close when provided", () => {
+    const result = mapUsBalance(balanceBody, "2026-09-20", (symbol) =>
+      symbol === "AAPL" ? 270 : null,
+    );
+
+    expect(result.holdings[0]).toMatchObject({
+      currentPrice: 270,
+    });
+    expect(result.holdings[0]?.evalAmount).toBeCloseTo(106650, 5);
+    expect(result.holdings[0]?.evalPflsAmount).toBeCloseTo(106650 - 111453.3212, 3);
+    expect(result.summary.totalEvalAmount).toBeCloseTo(106650, 5);
+    expect(result.summary.purchaseAmountTotal).toBeCloseTo(111453.3212, 3);
+  });
+
+  it("falls back to the broker price when no candle exists (holiday)", () => {
+    const result = mapUsBalance(balanceBody, "2026-09-07", () => null);
+
+    expect(result.holdings[0]).toMatchObject({
+      currentPrice: 275.24,
+      evalAmount: 108719.8,
+    });
+  });
+
+  it("maps US fills to the US market in USD", () => {
+    const trades = mapUsTrades({
+      result_list: [
+        {
+          deal_dt: "20260511",
+          deal_kind_nm: "매매",
+          rmrk_nm: "매수",
+          deal_no: "000000001",
+          stk_cd: "BAC",
+          stk_nm: "뱅크오브아메리카",
+          deal_qty: "20",
+          uv_exrt: "54.1300",
+          fc_deal_amt: "1082.60",
+          crnc_code: "USD",
+          proc_time: "08:25:42",
+        },
+        {
+          deal_dt: "20260511",
+          deal_kind_nm: "매매",
+          rmrk_nm: "매도",
+          deal_no: "000000002",
+          stk_cd: "BAC",
+          deal_qty: "0",
+        },
+        { deal_dt: "20260511", rmrk_nm: "기타", deal_no: "000000003", stk_cd: "BAC", deal_qty: "1" },
+      ],
+    });
+
+    expect(trades).toHaveLength(1);
+    expect(trades[0]).toMatchObject({
+      date: "2026-05-11",
+      externalId: "000000001",
+      market: "US",
+      symbol: "BAC",
+      side: "BUY",
+      quantity: 20,
+      avgPrice: 54.13,
+      amount: 1082.6,
+      currency: "USD",
+      orderTime: "08:25:42",
+    });
+  });
+
+  it("maps US candles to USD quotes", () => {
+    const quotes = mapUsDailyQuotes(
+      {
+        result_list: [
+          {
+            cur_prc: "201.3612",
+            open_pric: "200.0400",
+            high_pric: "203.7700",
+            low_pric: "200.0000",
+            acc_trde_qty: "153496196",
+            dt: "20260623",
+          },
+        ],
+      },
+      "NVDA",
+    );
+
+    expect(quotes).toEqual([
+      {
+        market: "US",
+        symbol: "NVDA",
+        date: "2026-06-23",
+        open: 200.04,
+        high: 203.77,
+        low: 200,
+        close: 201.3612,
+        volume: 153496196,
+        currency: "USD",
+        provider: "kiwoom",
+        source: "kiwoom-us-daily-chart",
+        raw: expect.any(Object),
+      },
+    ]);
   });
 });

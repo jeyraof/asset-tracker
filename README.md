@@ -57,6 +57,30 @@ appkey/appsecret**이 필요하므로, 이를 `KIS_CREDENTIALS` secret(계좌 ex
   2026-09-17 1,745,000 vs 1,766,000) KRX 고정이 실제로 의미가 있다.
 - `pnpm test` 75 passed, `pnpm typecheck` 통과.
 
+### 키움 미국주식 추가 (2026-09-20)
+
+- 별도 계좌행으로 등록: `external_id="<acctNo>-us"`, `country="US"`, `currency="USD"`,
+  `meta.product="us"` (금현물과 동일한 패턴). 토큰=계좌라 자격증명은 그대로 해석된다.
+- 엔드포인트: 잔고 `ust21070`(원장잔고), 체결 `ust21100`(미국주식 거래내역, 날짜 범위 1회),
+  일봉 `usa06012`(`upd_stkpc_tp=0`, `exrt_appl_tp=0`), 거래소 조회 `usa10098`.
+  경로는 `/api/us/acnt`·`/api/us/chart`·`/api/us/stkinfo`이고 목록 키는 `result_list`다.
+- 잔고·체결에 거래소 정보가 없어(`stex_nm="미국"`) 시세 조회 시 `usa10098`로
+  `stex_tp`(ND/NY/NA)를 해석한다(인메모리 캐시). `market="US"` 단일 시장.
+- **정규장 종가 고정**: KST 07:00 실행은 미국 정규장(마감 익일 KST 05:00/06:00) 이후지만
+  시간외 구간이라, 보유평가를 `usa06012` 정규장 종가(캔들 `dt == date`)로 재계산한다.
+- 라이브 확인(2026-09-20): `ust21100`은 `krw_repl_skip_yn="N"`이 실제로 필수(`1511`),
+  `usa06012`의 `strt_dt`는 **기준일(포함)**이라 `from`이 아니라 `date`를 보내야 한다(아니면
+  구간이 조용히 비어버림). 거래소를 잘못 주면 `1903`(QLD는 `ND`가 아니라 `NY`).
+- **소수점(소수점매매) 보유는 미지원(2026-09-20, 키움 확인)**: `ust21070`/`ust21170`의
+  `poss_qty`는 정수 주식만 준다(예: QLD 22, SPYM 23). 소수점 수량은 체결 `ust21100`의
+  `deal_qty`에만 소수점으로 내려오고, 소수점 *가치*는 집계(`ust21120`/`ust21121`/`ust21131`/
+  `ust21132`)에 포함돼 `ust21070` 합계보다 크다(관측 4063.72 vs 4247.50 USD). 키움 REST가
+  소수점 잔고를 지원하면 `mapUsHolding`/`ust21070` 파싱만 확장하면 된다(`quantity`는 REAL).
+- **스케줄 분리**: KRX/금현물은 KST 01:00(UTC Sun–Thu 16:00), 미국은 KST 07:00
+  (UTC Mon–Fri 22:00, `0 22 * * 2-6`)에 별도 실행. US 실행은 ET 세션 날짜(`etDate`)를 쓴다.
+- US 티커는 `stripSymbol`을 태우지 않는다(7자 `A/J/Q` 티커 손상 방지).
+- `pnpm test` 88 passed, `pnpm typecheck` 통과.
+
 ### 계좌 검증/동기화 결과 (2026-09-20, 로컬·원격)
 
 | 계좌 | 잔고 조회 | 체결내역 조회 |
@@ -154,8 +178,9 @@ It wires:
 - Worker: `asset-tracker`
 - D1: `asset-tracker-db` (binding `DB`) — `<d1-database-id>`
 - KV: `asset-tracker-kv` (binding `CACHE`) — `<kv-namespace-id>`
-- Cron: `0 16 * * 1-5` (UTC Sun-Thu 16:00 = KST Mon-Fri 01:00). Cloudflare uses
-  Quartz weekdays: 1=Sunday … 7=Saturday, so Sun-Thu is `1-5`.
+- Cron: `0 16 * * 1-5` (UTC Sun-Thu 16:00 = KST Mon-Fri 01:00) for KRX/gold, and
+  `0 22 * * 2-6` (UTC Mon-Fri 22:00 = KST Tue-Sat 07:00) for US. Cloudflare uses
+  Quartz weekdays: 1=Sunday … 7=Saturday, so Sun-Thu is `1-5` and Mon-Fri is `2-6`.
 
 ## Setup
 
@@ -295,6 +320,7 @@ curl -H "x-admin-token: $ADMIN_TOKEN" .../runs
 ```
 
 `POST /sync` accepts a JSON body too: `{ "date": "...", "lookbackDays": 7, "provider": "kis" }`.
+Restrict by product with `products` (comma-separated), e.g. `?products=us` for US accounts only.
 
 ## Commands
 
@@ -365,15 +391,21 @@ Worker --HTTPS--> Caddy (whitelisted IP) --HTTPS--> api.kiwoom.com
 - Endpoints: balance `kt00018`, deposit `kt00001`, fills `kt00015` (위탁종합거래내역,
   one date-range call per account), daily candles `ka10081` (`upd_stkpc_tp=0`,
   unadjusted).
+- US (미국주식) endpoints: balance `ust21070` (`/api/us/acnt`), fills `ust21100`,
+  candles `usa06012` (`/api/us/chart`), exchange `usa10098` (`/api/us/stkinfo`).
+  Registered as a separate account row with `meta.product="us"`; holdings are
+  valued at the regular-session close. See "키움 미국주식 추가" above.
 - Exchange codes: daily candles use the plain 6-digit code (KRX); NXT/unified
   candles require `_NX`/`_AL`, which `stripSymbol` removes so quotes stay KRX
   regular-session. Fills already cover all exchanges (`dmst_stex_tp=%`), while
   balance keeps `dmst_stex_tp=KRX` — it selects the valuation price of a single
   exchange-agnostic position, not which positions are returned.
 - Gold-spot (금현물) accounts are detected by `pnpm kiwoom:accounts` (kt00018
-  returns `400114`; `kt50020` succeeds) and stored with `meta.product="gold"`.
+  returns `400114`; kt50020 succeeds) and stored with `meta.product="gold"`.
   They use balance `kt50020`, fills `kt50032` (date range) and candles `ka50081`,
   and are recorded under `market="KRX-GOLD"`.
+- This same command probes `ust21070` and, on success, emits an extra US row
+  (`<acctNo>-us`, `meta.product="us"`). Pass `--no-us` to skip that probe.
 - Kiwoom returns HTTP 200 with `return_code != 0` on logical errors; an empty
   trade range comes back as `501724` (관련자료가없습니다) and is treated as no
   trades. Tokens are cached per app key in KV (`kiwoom:token:<env>:<credId>`) and

@@ -146,3 +146,85 @@ export interface KiwoomGoldTradeRaw {
 export interface KiwoomGoldTradeHistoryResponse extends KiwoomEnvelope {
   gold_trde_hist?: KiwoomGoldTradeRaw[];
 }
+
+/** US (overseas) stock raw shapes. The list key is `result_list`. */
+
+export interface KiwoomUsHoldingRaw {
+  stex_nm?: string;
+  crnc_code?: string;
+  stk_cd?: string;
+  frgn_stk_nm?: string;
+  qty?: string;
+  poss_qty?: string;
+  sell_alowq?: string;
+  frgn_stk_book_uv?: string;
+  now_pric?: string;
+  evlt_amt?: string;
+  pl_amt?: string;
+  pl_rt?: string;
+  evlt_amt_krw?: string;
+  pl_amt_krw?: string;
+  natn_nm?: string;
+  exch_rate?: string;
+  frgn_stk_book_amt?: string;
+  frgn_stk_book_amt_krw?: string;
+  [key: string]: unknown;
+}
+
+export interface KiwoomUsBalanceResponse extends KiwoomEnvelope {
+  crnc_code?: string;
+  tot_evlt_amt?: string;
+  tot_prch_amt?: string;
+  tot_pl_amt?: string;
+  tot_pl_rt?: string;
+  result_list?: KiwoomUsHoldingRaw[];
+}
+
+export interface KiwoomUsTradeRaw {
+  deal_dt?: string;
+  deal_kind_nm?: string;
+  rmrk_nm?: string;
+  deal_no?: string;
+  stk_cd?: string;
+  stk_nm?: string;
+  deal_qty?: string;
+  uv_exrt?: string;
+  fc_deal_amt?: string;
+  deal_amt?: string;
+  fc_cmsn?: string;
+  crnc_code?: string;
+  proc_time?: string;
+  [key: string]: unknown;
+}
+
+export interface KiwoomUsTradeHistoryResponse extends KiwoomEnvelope {
+  result_list?: KiwoomUsTradeRaw[];
+}
+
+export interface KiwoomUsExchangeRaw {
+  stex_tp?: string;
+  stk_cd?: string;
+  stk_nm?: string;
+  stk_enm?: string;
+  mkgb?: string;
+  [key: string]: unknown;
+}
+
+export interface KiwoomUsExchangeResponse extends KiwoomEnvelope {
+  list?: KiwoomUsExchangeRaw[];
+}
+
+export interface KiwoomUsCandleRaw {
+  cur_prc?: string;
+  open_pric?: string;
+  high_pric?: string;
+  low_pric?: string;
+  acc_trde_qty?: string;
+  dt?: string;
+  upd_stkpc_tp?: string;
+  [key: string]: unknown;
+}
+
+export interface KiwoomUsDailyChartResponse extends KiwoomEnvelope {
+  result_list?: KiwoomUsCandleRaw[];
+}

@@ -31,7 +31,7 @@ import {
   normalizeKiwoomEnv,
 } from "../src/providers/kiwoom/tr-ids";
 import type { KiwoomAccountListResponse } from "../src/providers/kiwoom/types";
-import type { AccountConfig } from "../src/domain/types";
+import type { AccountConfig, BalanceResult } from "../src/domain/types";
 import type { Env } from "../src/env";
 
 const DEFAULT_ENV = "prod";
@@ -133,19 +133,28 @@ function toAccount(
   credKey: string,
   env: string,
   tradesDisabled: boolean,
-  product: "stock" | "gold",
+  product: "stock" | "gold" | "us",
 ): AccountConfig {
   const meta: Record<string, unknown> = { acctNo, credKey };
+  let externalId = acctNo;
+  let country = "KR";
+  let currency = "KRW";
   if (product === "gold") meta["product"] = "gold";
+  if (product === "us") {
+    meta["product"] = "us";
+    externalId = `${acctNo}-us`;
+    country = "US";
+    currency = "USD";
+  }
   if (tradesDisabled) meta["trades"] = false;
   return {
     id: 0,
     provider: "kiwoom",
     env,
-    externalId: acctNo,
-    country: "KR",
-    currency: "KRW",
-    name: `Kiwoom ${acctNo}`,
+    externalId,
+    country,
+    currency,
+    name: product === "us" ? `Kiwoom ${acctNo} US` : `Kiwoom ${acctNo}`,
     active: true,
     meta,
   };
@@ -161,9 +170,9 @@ function seedSql(accounts: AccountConfig[]): string {
     const meta = sqlString(JSON.stringify(account.meta));
     lines.push(
       `INSERT INTO accounts (provider, env, external_id, country, currency, name, active, meta_json)`,
-      `VALUES ('${account.provider}', '${account.env}', '${account.externalId}', 'KR', 'KRW', '${sqlString(account.name ?? account.externalId)}', 1, '${meta}')`,
+      `VALUES ('${account.provider}', '${account.env}', '${sqlString(account.externalId)}', '${sqlString(account.country)}', '${sqlString(account.currency)}', '${sqlString(account.name ?? account.externalId)}', 1, '${meta}')`,
       `ON CONFLICT (provider, env, external_id) DO UPDATE SET`,
-      `  name = excluded.name, active = excluded.active, meta_json = excluded.meta_json, updated_at = datetime('now');`,
+      `  name = excluded.name, active = excluded.active, country = excluded.country, currency = excluded.currency, meta_json = excluded.meta_json, updated_at = datetime('now');`,
       "",
     );
   }
@@ -183,6 +192,7 @@ async function main(): Promise<void> {
         "  --base-url <url>           Reverse-proxy base URL (default: KIWOOM_BASE_URL or the env default)",
         "  --relay-secret <value>     X-Kiwoom-Relay header value for the reverse proxy",
         "  --no-trades <list>         Accounts to mark meta.trades=false (skip trade sync)",
+        "  --no-us                    Skip the US (미국주식) product probe",
         "  --sql                      Print seed SQL instead of a report",
         "  --raw                      Print raw balance summary JSON",
         "  --trades                   Also test the order-fills endpoint",
@@ -245,6 +255,7 @@ async function main(): Promise<void> {
   const noTrades = new Set(
     splitCandidates(argValues(args, "no-trades")).map((value) => value.replace(/\D/g, "")),
   );
+  const noUs = hasFlag(args, "no-us");
 
   const entries: [string, KiwoomCredentials][] = [...credentialMap.entries()].filter(
     ([key]) => explicit.size === 0 || explicit.has(key),
@@ -279,49 +290,74 @@ async function main(): Promise<void> {
       const acctNo = (list.body.acctNo ?? credKey).replace(/\D/g, "") || credKey;
       const tradesDisabled = noTrades.has(credKey) || noTrades.has(acctNo);
 
-      // Product detection: domestic-stock balance (kt00018) or gold-spot (kt50020).
-      let product: "stock" | "gold";
+      // Product detection: domestic stock (kt00018), US (ust21070), gold (kt50020).
+      const products: ("stock" | "us" | "gold")[] = [];
       try {
         await discovery.request(KIWOOM_API_IDS.balance, KIWOOM_PATHS.account, {
           qry_tp: "1",
           dmst_stex_tp: "KRX",
         });
-        product = "stock";
+        products.push("stock");
       } catch {
-        await discovery.request(KIWOOM_API_IDS.goldBalance, KIWOOM_PATHS.account, {});
-        product = "gold";
+        // not a domestic-stock account
       }
-
-      const account = toAccount(acctNo, credKey, environment, tradesDisabled, product);
-
-      const balance = await provider.getBalance(account, date);
-      verified.push(account);
-      const summary = balance.summary;
-      console.error(
-        `OK  (acct ${acctNo}, ${product}, holdings: ${balance.holdings.length}, deposit: ${summary.depositTotal ?? "-"}, total: ${summary.totalEvalAmount ?? "-"})`,
-      );
-
-      if (wantRaw) {
-        console.log(
-          JSON.stringify(
-            { externalId: account.externalId, summary: summary.raw, holdings: balance.holdings.map((h) => h.raw) },
-            null,
-            2,
-          ),
-        );
-      }
-
-      if (wantTrades && !tradesDisabled) {
+      if (!noUs) {
         try {
-          const trades = await provider.getTrades(account, addDays(date, -6), date);
-          console.error(`      trades: ${trades.length}`);
+          await discovery.request(KIWOOM_API_IDS.usBalance, KIWOOM_PATHS.usAccount, {});
+          products.push("us");
+        } catch {
+          // US trading not enabled for this account
+        }
+      }
+      if (products.length === 0) {
+        await discovery.request(KIWOOM_API_IDS.goldBalance, KIWOOM_PATHS.account, {});
+        products.push("gold");
+      }
+
+      for (const product of products) {
+        const account = toAccount(acctNo, credKey, environment, tradesDisabled, product);
+
+        let balance: BalanceResult;
+        try {
+          balance = await provider.getBalance(account, date);
         } catch (error) {
           const detail = isKiwoomApiError(error)
-            ? `${error.returnCode ?? "?"} ${error.message.trim()}`
+            ? `${error.returnCode ?? "?"} ${error.message}`
             : error instanceof Error
               ? error.message
               : String(error);
-          console.error(`      trades FAIL (${detail})`);
+          console.error(`FAIL ${product} (${detail})`);
+          continue;
+        }
+
+        verified.push(account);
+        const summary = balance.summary;
+        console.error(
+          `OK  (acct ${acctNo}, ${product}, holdings: ${balance.holdings.length}, deposit: ${summary.depositTotal ?? "-"}, total: ${summary.totalEvalAmount ?? "-"})`,
+        );
+
+        if (wantRaw) {
+          console.log(
+            JSON.stringify(
+              { externalId: account.externalId, summary: summary.raw, holdings: balance.holdings.map((h) => h.raw) },
+              null,
+              2,
+            ),
+          );
+        }
+
+        if (wantTrades && !tradesDisabled) {
+          try {
+            const trades = await provider.getTrades(account, addDays(date, -6), date);
+            console.error(`      trades: ${trades.length}`);
+          } catch (error) {
+            const detail = isKiwoomApiError(error)
+              ? `${error.returnCode ?? "?"} ${error.message.trim()}`
+              : error instanceof Error
+                ? error.message
+                : String(error);
+            console.error(`      trades FAIL (${detail})`);
+          }
         }
       }
     } catch (error) {
@@ -334,7 +370,7 @@ async function main(): Promise<void> {
     }
   }
 
-  console.error(`\nVerified ${verified.length}/${entries.length} account(s).`);
+  console.error(`\nVerified ${verified.length} account(s) from ${entries.length} credential(s).`);
 
   if (wantSql) {
     if (verified.length > 0) console.log(`\n${seedSql(verified)}`);

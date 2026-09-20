@@ -1,5 +1,12 @@
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
+const ET_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/New_York",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
 /** Returns a Date whose UTC getters reflect Korea Standard Time. */
 export function kstNow(base: Date = new Date()): Date {
   return new Date(base.getTime() + KST_OFFSET_MS);
@@ -8,6 +15,11 @@ export function kstNow(base: Date = new Date()): Date {
 /** Today's date in KST as YYYY-MM-DD. */
 export function kstDate(base: Date = new Date()): string {
   return toDateString(kstNow(base));
+}
+
+/** The US Eastern (America/New_York) date as YYYY-MM-DD. */
+export function etDate(base: Date = new Date()): string {
+  return ET_DATE_FORMATTER.format(base);
 }
 
 /** Formats a Date using its UTC getters as YYYY-MM-DD. */

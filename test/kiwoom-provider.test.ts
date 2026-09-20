@@ -30,6 +30,16 @@ function goldAccount(externalId: string, credKey: string): AccountConfig {
   return { ...account(externalId, credKey), meta: { acctNo: externalId, credKey, product: "gold" } };
 }
 
+function usAccount(externalId: string, credKey: string): AccountConfig {
+  return {
+    ...account(externalId, credKey),
+    externalId: `${externalId}-us`,
+    country: "US",
+    currency: "USD",
+    meta: { acctNo: externalId, credKey, product: "us" },
+  };
+}
+
 function createProvider(relaySecret?: string) {
   const fake = createFakeKv();
   const mock = createFetchMock((url, init) => {
@@ -141,6 +151,74 @@ function createProvider(relaySecret?: string) {
         gds_day_chart_qry: [
           { cur_prc: "195310", acc_trde_qty: "148033", dt: "20260919", open_pric: "193450", high_pric: "195380", low_pric: "193450" },
           { cur_prc: "1", dt: "20260101" },
+        ],
+      });
+    }
+    if (apiId === "ust21070") {
+      return jsonResponse({
+        return_code: 0,
+        crnc_code: "USD",
+        tot_evlt_amt: "108719.8000",
+        tot_prch_amt: "111453.3212",
+        tot_pl_amt: "-3283.9512",
+        tot_pl_rt: "-2.94",
+        result_list: [
+          {
+            stex_nm: "미국",
+            crnc_code: "USD",
+            stk_cd: "AAPL",
+            frgn_stk_nm: "애플",
+            poss_qty: "000000000395",
+            frgn_stk_book_uv: "282.1603",
+            frgn_stk_book_amt: "111453.3212",
+            now_pric: "275.2400",
+            evlt_amt: "108719.8000",
+            pl_amt: "-3283.9512",
+            pl_rt: "-2.94",
+            exch_rate: "1524.50",
+          },
+        ],
+      });
+    }
+    if (apiId === "usa10098") {
+      return jsonResponse({
+        return_code: 0,
+        list: [{ stex_tp: "ND", stk_cd: "AAPL", stk_nm: "엔비디아", mkgb: "NASDAQ" }],
+      });
+    }
+    if (apiId === "usa06012") {
+      return jsonResponse({
+        return_code: 0,
+        result_list: [
+          {
+            cur_prc: "270.0000",
+            open_pric: "268.0000",
+            high_pric: "272.0000",
+            low_pric: "267.0000",
+            acc_trde_qty: "1000000",
+            dt: "20260920",
+          },
+          { cur_prc: "200.0000", dt: "20260101" },
+        ],
+      });
+    }
+    if (apiId === "ust21100") {
+      return jsonResponse({
+        return_code: 0,
+        result_list: [
+          {
+            deal_dt: "20260918",
+            deal_kind_nm: "매매",
+            rmrk_nm: "매수",
+            deal_no: "000000001",
+            stk_cd: "BAC",
+            stk_nm: "뱅크오브아메리카",
+            deal_qty: "20",
+            uv_exrt: "54.1300",
+            fc_deal_amt: "1082.60",
+            crnc_code: "USD",
+            proc_time: "08:25:42",
+          },
         ],
       });
     }
@@ -267,5 +345,94 @@ describe("KiwoomProvider", () => {
     const ids = apiCalls(mock).map((call) => (call.init?.headers as Record<string, string>)["api-id"]);
     expect(ids).toContain("ka50081");
     expect(ids).not.toContain("ka10081");
+  });
+
+  it("supports the US market", () => {
+    const { provider } = createProvider();
+    expect(provider.supportsMarket("US")).toBe(true);
+  });
+
+  it("uses US endpoints and pins valuation to the regular close", async () => {
+    const { provider, mock } = createProvider();
+
+    const result = await provider.getBalance(usAccount("12345678", "12345678"), "2026-09-20");
+
+    expect(result.summary.currency).toBe("USD");
+    expect(result.holdings).toHaveLength(1);
+    expect(result.holdings[0]).toMatchObject({
+      market: "US",
+      symbol: "AAPL",
+      productName: "애플",
+      currency: "USD",
+      quantity: 395,
+      avgPrice: 282.1603,
+      purchaseAmount: 111453.3212,
+      currentPrice: 270,
+    });
+    expect(result.holdings[0]?.evalAmount).toBeCloseTo(395 * 270, 5);
+    expect(result.summary.totalEvalAmount).toBeCloseTo(106650, 5);
+
+    const ids = apiCalls(mock).map((call) => (call.init?.headers as Record<string, string>)["api-id"]);
+    expect(ids).toContain("ust21070");
+    expect(ids).toContain("usa10098");
+    expect(ids).toContain("usa06012");
+    expect(ids).not.toContain("kt00018");
+  });
+
+  it("fetches US fills via ust21100", async () => {
+    const { provider, mock } = createProvider();
+
+    const trades = await provider.getTrades(usAccount("12345678", "12345678"), "2026-09-18", "2026-09-20");
+
+    expect(trades).toHaveLength(1);
+    expect(trades[0]).toMatchObject({
+      date: "2026-09-18",
+      externalId: "000000001",
+      market: "US",
+      symbol: "BAC",
+      side: "BUY",
+      quantity: 20,
+      avgPrice: 54.13,
+      amount: 1082.6,
+      currency: "USD",
+      orderTime: "08:25:42",
+    });
+    const ids = apiCalls(mock).map((call) => (call.init?.headers as Record<string, string>)["api-id"]);
+    expect(ids).toEqual(["ust21100"]);
+    const body = JSON.parse(String(apiCalls(mock)[0]?.init?.body));
+    expect(body).toMatchObject({ tp: "3", krw_repl_skip_yn: "N" });
+  });
+
+  it("routes US quotes to usa06012 after an exchange lookup", async () => {
+    const { provider, mock } = createProvider();
+
+    const quotes = await provider.getDailyQuotes([{ market: "US", symbol: "AAPL" }], "2026-09-20");
+
+    expect(quotes).toHaveLength(1);
+    expect(quotes[0]).toMatchObject({
+      market: "US",
+      symbol: "AAPL",
+      date: "2026-09-20",
+      close: 270,
+      volume: 1000000,
+      currency: "USD",
+      source: "kiwoom-us-daily-chart",
+    });
+    const ids = apiCalls(mock).map((call) => (call.init?.headers as Record<string, string>)["api-id"]);
+    expect(ids).toContain("usa10098");
+    expect(ids).toContain("usa06012");
+    expect(ids).not.toContain("ka10081");
+
+    const chartCall = apiCalls(mock).find(
+      (call) => (call.init?.headers as Record<string, string>)["api-id"] === "usa06012",
+    );
+    const chartBody = JSON.parse(String(chartCall?.init?.body));
+    expect(chartBody).toMatchObject({
+      stex_tp: "ND",
+      stk_cd: "AAPL",
+      strt_dt: "20260920",
+      upd_stkpc_tp: "0",
+      exrt_appl_tp: "0",
+    });
   });
 });

@@ -50,6 +50,10 @@ Always run `pnpm test` and `pnpm typecheck` after changes.
 - Accounts opt out of trade sync with `meta.trades = false` (checked by
   `tradesEnabled` in `src/sync/orchestrator.ts`), so provider-agnostic code never
   hardcodes a broker's unsupported-endpoint error.
+- Scheduled runs are split by account product (`productOf` / `SyncOptions.products`):
+  the KRX run (`stock`+`gold`) fires at KST 01:00, and the US run (`us`) fires at
+  KST 07:00 after the US regular close. `src/index.ts` picks the date/`products`
+  from `controller.cron`; the US run uses the **ET** session date (`etDate`), not KST.
 
 ## Conventions
 
@@ -100,13 +104,37 @@ Always run `pnpm test` and `pnpm typecheck` after changes.
   check. Numbers are zero-padded signed strings and symbols carry an `A`/`J`/`Q`
   prefix (`A005930`, `A0199C0` — strip only the prefix, keep letters in the code).
   An empty trade range is `501724` (관련자료가없습니다), treated as no trades.
-- Kiwoom trades use date-range calls (stock `kt00015`, gold `kt50032`) — one
-  request per account, which keeps the Worker under the 50-subrequest limit. Do
-  not go back to per-day `kt00007`/`kt50031` loops. The side is `io_tp_nm`
-  (stock) / `rmrk_nm` (gold). `ka10081`/`ka50081` use `upd_stkpc_tp=0`.
+- Kiwoom trades use date-range calls (stock `kt00015`, gold `kt50032`, US
+  `ust21100`) — one request per account, which keeps the Worker under the
+  50-subrequest limit. Do not go back to per-day `kt00007`/`kt50031` loops. The
+  side is `io_tp_nm` (stock) / `rmrk_nm` (gold, US). `ka10081`/`ka50081`/
+  `usa06012` use `upd_stkpc_tp=0`.
 - Gold-spot accounts (`meta.product="gold"`) use `kt50020`/`kt50032`/`ka50081`
   and `market="KRX-GOLD"`; `kiwoom:accounts` detects them when `kt00018` fails
   with `400114`.
+- Kiwoom US (`meta.product="us"`) uses `/api/us/*` (`ust21070` balance,
+  `ust21100` trades, `usa10098` exchange, `usa06012` daily chart) with a
+  `result_list` envelope. Accounts are extra rows (`external_id="<acctNo>-us"`,
+  `country="US"`, `currency="USD"`, `market="US"`). Neither the balance nor the
+  trades carry an exchange, so quotes resolve `stex_tp` (`ND`/`NY`/`NA`) via
+  `usa10098` first (a `ND` guess fails with `1903` for NYSE/AMEX names). The US
+  run fires at KST 07:00, which is still after-hours, so holdings are re-valued
+  at the regular-session close (candle `dt == date`) instead of the broker's
+  `now_pric`. Never run US tickers through `stripSymbol`: 7-char tickers
+  starting with `A`/`J`/`Q` would be truncated.
+- Verified live (2026-09-20): `ust21100` requires `krw_repl_skip_yn` (send `"N"`;
+  the spec marks it optional but the API returns `1511` without it), and
+  `usa06012`'s `strt_dt` is an **inclusive base date** (candles come back
+  descending from it) — send `strt_dt=date`, not the window start, or the
+  lookback window silently comes back empty.
+- Kiwoom REST does **not** expose US fractional (소수점) holdings yet. `ust21070`/
+  `ust21170` return whole shares only (`poss_qty` is an integer); fractional
+  quantities appear only in trades (`ust21100` `deal_qty`, kind `소수점매매`).
+  The fractional *value* is folded into the aggregate endpoints (`ust21120`/
+  `ust21121`/`ust21131`/`ust21132`), so `ust21070`'s `tot_evlt_amt` can be lower
+  than the aggregate (observed 2026-09-20: 4063.72 vs 4247.50 USD). Do not try to
+  "fix" `poss_qty`. When Kiwoom ships a fractional balance TR/field, extend
+  `mapUsHolding`/the `ust21070` request — `quantity` is `REAL`, so no migration.
 - KRX·NXT are separate exchanges now. Holdings/trades must include NXT (KIS
   `inquire-daily-ccld` uses `EXCG_ID_DVSN_CD=ALL`; Kiwoom `kt00015`
   `dmst_stex_tp=%`), while **quotes must stay KRX-only**. Kiwoom `kt00018`'s

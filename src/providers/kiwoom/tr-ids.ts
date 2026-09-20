@@ -9,6 +9,9 @@ export const KIWOOM_PATHS = {
   token: "/oauth2/token",
   account: "/api/dostk/acnt",
   chart: "/api/dostk/chart",
+  usAccount: "/api/us/acnt",
+  usChart: "/api/us/chart",
+  usStockInfo: "/api/us/stkinfo",
 } as const;
 
 export const KIWOOM_API_IDS = {
@@ -20,6 +23,10 @@ export const KIWOOM_API_IDS = {
   goldBalance: "kt50020",
   goldTradeHistory: "kt50032",
   goldDailyChart: "ka50081",
+  usBalance: "ust21070",
+  usTradeHistory: "ust21100",
+  usExchange: "usa10098",
+  usDailyChart: "usa06012",
 } as const;
 
 export function normalizeKiwoomEnv(value: string | undefined): KiwoomEnvironment {

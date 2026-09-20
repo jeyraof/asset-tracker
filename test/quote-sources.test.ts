@@ -47,6 +47,16 @@ describe("resolveQuoteCandidates", () => {
     expect(result[0]?.candidates).toEqual(["kiwoom"]);
   });
 
+  it("routes US instruments to kiwoom only", () => {
+    const result = resolveQuoteCandidates(
+      [entry("US", "AAPL", ["kis", "kiwoom"])],
+      available({ kis: ["KRX"], kiwoom: ["KRX", "KRX-GOLD", "US"] }),
+      priority,
+    );
+
+    expect(result[0]?.candidates).toEqual(["kiwoom"]);
+  });
+
   it("drops instruments no available provider can price", () => {
     const result = resolveQuoteCandidates(
       [entry("KRX", "005930", ["kis"])],

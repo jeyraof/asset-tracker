@@ -16,6 +16,8 @@ export interface SyncOptions {
   lookbackDays?: number;
   /** Restrict to a single provider id, e.g. "kis". */
   provider?: string;
+  /** Restrict to account products (`meta.product`, default "stock"), e.g. ["us"]. */
+  products?: readonly string[];
   /** Run origin: "cron" | "http" | "backfill". */
   source?: string;
 }
@@ -63,6 +65,15 @@ export function tradesEnabled(account: AccountConfig): boolean {
 }
 
 /**
+ * An account's product (`meta.product`), defaulting to "stock". Drives which
+ * scheduled run picks up the account (e.g. US accounts run after the US close).
+ */
+export function productOf(account: Pick<AccountConfig, "meta">): string {
+  const value = account.meta?.["product"];
+  return typeof value === "string" && value !== "" ? value : "stock";
+}
+
+/**
  * Provider-agnostic sync: balance + holdings snapshot, quantity-changing
  * trades, and daily OHLC quotes for every held instrument.
  */
@@ -96,6 +107,11 @@ export async function runSync(env: Env, options: SyncOptions = {}): Promise<Sync
     await repo.finishSyncRun(env.DB, runId, report.status, report);
     logger.error("failed to load accounts", { runId, error: errorText(error) });
     return report;
+  }
+
+  if (options.products) {
+    const products = new Set(options.products);
+    accounts = accounts.filter((account) => products.has(productOf(account)));
   }
 
   const providerCache = new Map<string, BrokerProvider | null>();

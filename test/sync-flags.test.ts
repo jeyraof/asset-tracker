@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { tradesEnabled } from "../src/sync/orchestrator";
+import { productOf, tradesEnabled } from "../src/sync/orchestrator";
 import type { AccountConfig } from "../src/domain/types";
 
 function account(meta: Record<string, unknown>): AccountConfig {
@@ -25,5 +25,17 @@ describe("tradesEnabled", () => {
 
   it("is disabled only when meta.trades is exactly false", () => {
     expect(tradesEnabled(account({ trades: false }))).toBe(false);
+  });
+});
+
+describe("productOf", () => {
+  it("defaults to stock", () => {
+    expect(productOf(account({}))).toBe("stock");
+    expect(productOf(account({ product: "" }))).toBe("stock");
+  });
+
+  it("returns the declared product", () => {
+    expect(productOf(account({ product: "gold" }))).toBe("gold");
+    expect(productOf(account({ product: "us" }))).toBe("us");
   });
 });
