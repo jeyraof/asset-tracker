@@ -222,6 +222,9 @@ function createProvider(relaySecret?: string) {
         ],
       });
     }
+    if (apiId === "ust31301") {
+      return jsonResponse({ return_code: 0, aplc_exrt: "1524.50", exrt_tp_nm: "달러->원화" });
+    }
     return jsonResponse({ return_code: 0 });
   });
 
@@ -434,5 +437,32 @@ describe("KiwoomProvider", () => {
       upd_stkpc_tp: "0",
       exrt_appl_tp: "0",
     });
+  });
+
+  it("fetches the US FX rate via ust31301", async () => {
+    const { provider, mock } = createProvider();
+
+    const rate = await provider.getFxRate("USD", "KRW", "2026-09-21");
+
+    expect(rate).toMatchObject({
+      base: "USD",
+      quote: "KRW",
+      date: "2026-09-21",
+      rate: 1524.5,
+      provider: "kiwoom",
+      source: "kiwoom-us-fx-rate",
+    });
+    const call = apiCalls(mock).find(
+      (entry) => (entry.init?.headers as Record<string, string>)["api-id"] === "ust31301",
+    );
+    expect(call?.url).toBe("https://kiwoom-api.example.test/api/us/exchange");
+    expect(JSON.parse(String(call?.init?.body))).toMatchObject({ exch_tp: "2" });
+  });
+
+  it("returns no FX rate for unsupported pairs", async () => {
+    const { provider, mock } = createProvider();
+
+    expect(await provider.getFxRate("JPY", "KRW", "2026-09-21")).toBeNull();
+    expect(apiCalls(mock)).toHaveLength(0);
   });
 });

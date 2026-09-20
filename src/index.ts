@@ -2,6 +2,7 @@ import type { Env } from "./env";
 import { etDate, isValidDateString, kstDate } from "./lib/dates";
 import { logger } from "./lib/logger";
 import { runSync } from "./sync/orchestrator";
+import { syncFxRates } from "./sync/fx";
 import { listActiveAccounts, listRecentRuns } from "./db/repo";
 import { listKnownProviders } from "./providers/registry";
 
@@ -44,18 +45,21 @@ function pickProducts(value: unknown): string[] | undefined {
   return products.length > 0 ? products : undefined;
 }
 
+async function readJsonBody(request: Request): Promise<Record<string, unknown>> {
+  if (request.method !== "POST") return {};
+  try {
+    const parsed = await request.json();
+    if (parsed && typeof parsed === "object") return parsed as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+  return {};
+}
+
 async function handleSync(request: Request, url: URL, env: Env): Promise<Response> {
   if (!isAuthorized(request, env)) return json({ error: "unauthorized" }, 401);
 
-  let body: Record<string, unknown> = {};
-  if (request.method === "POST") {
-    try {
-      const parsed = await request.json();
-      if (parsed && typeof parsed === "object") body = parsed as Record<string, unknown>;
-    } catch {
-      body = {};
-    }
-  }
+  const body = await readJsonBody(request);
 
   const date = pickString(body["date"]) ?? pickString(url.searchParams.get("date")) ?? kstDate();
   if (!isValidDateString(date)) return json({ error: `invalid date: ${date}` }, 400);
@@ -72,6 +76,22 @@ async function handleSync(request: Request, url: URL, env: Env): Promise<Respons
 
   const report = await runSync(env, { date, lookbackDays, provider, products, source: "http" });
   return json(report, report.status === "failed" ? 502 : 200);
+}
+
+async function handleFxSync(request: Request, url: URL, env: Env): Promise<Response> {
+  if (!isAuthorized(request, env)) return json({ error: "unauthorized" }, 401);
+
+  const body = await readJsonBody(request);
+
+  const date = pickString(body["date"]) ?? pickString(url.searchParams.get("date")) ?? kstDate();
+  if (!isValidDateString(date)) return json({ error: `invalid date: ${date}` }, 400);
+
+  const provider = pickString(body["provider"]) ?? pickString(url.searchParams.get("provider"));
+  const base = pickString(body["base"]) ?? pickString(url.searchParams.get("base"));
+  const quote = pickString(body["quote"]) ?? pickString(url.searchParams.get("quote"));
+
+  const report = await syncFxRates(env, { date, provider, base, quote, source: "http" });
+  return json(report, report.errors.length > 0 ? 502 : 200);
 }
 
 export default {
@@ -91,6 +111,19 @@ export default {
         });
       }),
     );
+
+    // FX is a separate task keyed to the KST date; run it only with the US cron
+    // and never let its failure affect the holdings snapshot.
+    if (isUs) {
+      ctx.waitUntil(
+        syncFxRates(env, { source: "cron" }).catch((error: unknown) => {
+          logger.error("scheduled fx sync failed", {
+            date: kstDate(scheduledAt),
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }),
+      );
+    }
   },
 
   async fetch(request, env) {
@@ -108,6 +141,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/sync") {
       return handleSync(request, url, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/sync/fx") {
+      return handleFxSync(request, url, env);
     }
 
     if (request.method === "GET" && url.pathname === "/accounts") {

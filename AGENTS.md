@@ -54,6 +54,12 @@ Always run `pnpm test` and `pnpm typecheck` after changes.
   the KRX run (`stock`+`gold`) fires at KST 20:30, and the US run (`us`) fires at
   KST 07:00 after the US regular close. `src/index.ts` picks the date/`products`
   from `controller.cron`; the US run uses the **ET** session date (`etDate`), not KST.
+- FX is a **separate task** (`src/sync/fx.ts`, `syncFxRates`) keyed to the **KST**
+  date, stored in `fx_rates`. It is runnable on its own via `POST /sync/fx` and is
+  also invoked alongside the US cron as an independent `ctx.waitUntil` (its
+  failure never affects the holdings snapshot). A provider opts in by implementing
+  the optional `BrokerProvider.getFxRate`; providers without it (KIS) are skipped.
+  Keep FX provider-agnostic: no TR_IDs or broker field names outside `providers/`.
 
 ## Conventions
 
@@ -127,8 +133,13 @@ Always run `pnpm test` and `pnpm typecheck` after changes.
   `usa06012`'s `strt_dt` is an **inclusive base date** (candles come back
   descending from it) — send `strt_dt=date`, not the window start, or the
   lookback window silently comes back empty.
-- Kiwoom REST does **not** expose US fractional (소수점) holdings yet. `ust21070`/
-  `ust21170` return whole shares only (`poss_qty` is an integer); fractional
+- US FX uses `ust31301` (환율 조회, `POST /api/us/exchange`) from the FX task. The
+  body requires `exch_tp` (`1` = KRW→USD, `2` = USD→KRW; we send `2`) and the
+  response is a flat envelope: `aplc_exrt` (적용환율, preferred), `sell_aplc_exrt`,
+  `buy_aplc_exrt`. The response carries no date, so the task's KST date is stored;
+  only USD→KRW is mapped. Verified against Kiwoom's official example repo
+  (2026-09-21); the live `1511` error without `exch_tp` confirmed it.
+- Kiwoom REST does **not** expose US fractional (소수점) holdings yet. `ust21070`/  `ust21170` return whole shares only (`poss_qty` is an integer); fractional
   quantities appear only in trades (`ust21100` `deal_qty`, kind `소수점매매`).
   The fractional *value* is folded into the aggregate endpoints (`ust21120`/
   `ust21121`/`ust21131`/`ust21132`), so `ust21070`'s `tot_evlt_amt` can be lower

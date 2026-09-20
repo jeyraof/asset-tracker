@@ -102,6 +102,20 @@ export interface DailyQuote {
   raw: unknown;
 }
 
+export interface FxRate {
+  /** Base currency, e.g. "USD". */
+  base: Currency;
+  /** Quote currency, e.g. "KRW". */
+  quote: Currency;
+  /** YYYY-MM-DD the rate applies to. */
+  date: string;
+  rate: number;
+  /** Provider id that produced the rate, e.g. "kiwoom". */
+  provider: string;
+  source: string;
+  raw: unknown;
+}
+
 /**
  * The contract every broker integration implements.
  * The sync engine knows nothing beyond this interface.
@@ -122,4 +136,10 @@ export interface BrokerProvider {
 
   /** Daily OHLC quotes as of `date` for the given instruments. */
   getDailyQuotes(instruments: InstrumentRef[], date: string): Promise<DailyQuote[]>;
+
+  /**
+   * Optional spot FX rate for a currency pair as of `date`. Providers that have
+   * no FX endpoint simply omit it; the separate FX task skips them.
+   */
+  getFxRate?(base: Currency, quote: Currency, date: string): Promise<FxRate | null>;
 }

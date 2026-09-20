@@ -3,6 +3,7 @@ import type { AccountConfig, BrokerProvider, InstrumentRef } from "../domain/typ
 import { getProvider, quoteProviderPriority } from "../providers/registry";
 import * as repo from "../db/repo";
 import { kstDate } from "../lib/dates";
+import { errorCode, errorText } from "../lib/errors";
 import { logger } from "../lib/logger";
 import { syncBalance } from "./balances";
 import { syncTrades } from "./trades";
@@ -308,16 +309,4 @@ export async function syncQuotesWithFallback(
       .sort((a, b) => priority.indexOf(a[0]) - priority.indexOf(b[0]))
       .map(([provider, value]) => ({ provider, ...value })),
   );
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function errorCode(error: unknown): string | undefined {
-  if (error && typeof error === "object" && "code" in error) {
-    const value = (error as { code?: unknown }).code;
-    if (typeof value === "string") return value;
-  }
-  return undefined;
 }

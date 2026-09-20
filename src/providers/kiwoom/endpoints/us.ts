@@ -4,14 +4,16 @@ import type {
   BalanceResult,
   BalanceSummary,
   DailyQuote,
+  FxRate,
   HoldingSnapshot,
   TradeFill,
 } from "../../../domain/types";
-import { KIWOOM_PROVIDER_ID, sideOf } from "./domestic";
+import { KIWOOM_PROVIDER_ID, KRW, sideOf } from "./domestic";
 import type {
   KiwoomUsBalanceResponse,
   KiwoomUsCandleRaw,
   KiwoomUsDailyChartResponse,
+  KiwoomUsFxRateResponse,
   KiwoomUsHoldingRaw,
   KiwoomUsTradeHistoryResponse,
   KiwoomUsTradeRaw,
@@ -191,4 +193,29 @@ export function mapUsDailyQuotes(
   return (body.result_list ?? [])
     .map((candle) => mapUsCandle(candle, symbol))
     .filter((quote): quote is DailyQuote => quote !== null);
+}
+
+/**
+ * Maps a US FX rate (ust31301) to the normalized model. Prefers the applied
+ * rate (`aplc_exrt`), falling back to the sell/buy applied rates. The response
+ * carries no date, so `date` is the caller's KST date.
+ */
+export function mapUsFxRate(
+  body: KiwoomUsFxRateResponse,
+  date: string,
+  base: string = USD,
+  quote: string = KRW,
+): FxRate | null {
+  const rate = num(body.aplc_exrt) ?? num(body.sell_aplc_exrt) ?? num(body.buy_aplc_exrt);
+  if (rate === null || rate <= 0) return null;
+
+  return {
+    base,
+    quote,
+    date,
+    rate,
+    provider: KIWOOM_PROVIDER_ID,
+    source: "kiwoom-us-fx-rate",
+    raw: body,
+  };
 }

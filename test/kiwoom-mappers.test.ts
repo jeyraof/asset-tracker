@@ -6,7 +6,7 @@ import {
   stripSymbol,
 } from "../src/providers/kiwoom/endpoints/domestic";
 import { mapGoldBalance, mapGoldDailyQuotes, mapGoldTrades } from "../src/providers/kiwoom/endpoints/gold";
-import { mapUsBalance, mapUsDailyQuotes, mapUsTrades } from "../src/providers/kiwoom/endpoints/us";
+import { mapUsBalance, mapUsDailyQuotes, mapUsFxRate, mapUsTrades } from "../src/providers/kiwoom/endpoints/us";
 
 describe("stripSymbol", () => {
   it("removes the security-type prefix", () => {
@@ -417,5 +417,25 @@ describe("US mappers", () => {
         raw: expect.any(Object),
       },
     ]);
+  });
+
+  it("maps a US FX rate, preferring the applied rate", () => {
+    const rate = mapUsFxRate(
+      { return_code: 0, aplc_exrt: "1524.50", sell_aplc_exrt: "1522.00", buy_aplc_exrt: "1527.00" },
+      "2026-09-21",
+    );
+
+    expect(rate).toMatchObject({
+      base: "USD",
+      quote: "KRW",
+      date: "2026-09-21",
+      rate: 1524.5,
+      provider: "kiwoom",
+      source: "kiwoom-us-fx-rate",
+      raw: expect.any(Object),
+    });
+    expect(mapUsFxRate({ sell_aplc_exrt: "1522.00" }, "2026-09-21")?.rate).toBe(1522);
+    expect(mapUsFxRate({ aplc_exrt: "0" }, "2026-09-21")).toBeNull();
+    expect(mapUsFxRate({}, "2026-09-21")).toBeNull();
   });
 });

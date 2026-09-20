@@ -8,6 +8,7 @@ import type {
   BalanceResult,
   BrokerProvider,
   DailyQuote,
+  FxRate,
   InstrumentRef,
   TradeFill,
 } from "../../domain/types";
@@ -37,7 +38,15 @@ import {
   mapDomesticTrades,
 } from "./endpoints/domestic";
 import { mapGoldBalance, mapGoldDailyQuotes, mapGoldTrades } from "./endpoints/gold";
-import { US, isUsExchange, mapUsBalance, mapUsDailyQuotes, mapUsTrades } from "./endpoints/us";
+import {
+  US,
+  USD,
+  isUsExchange,
+  mapUsBalance,
+  mapUsDailyQuotes,
+  mapUsFxRate,
+  mapUsTrades,
+} from "./endpoints/us";
 import type {
   KiwoomBalanceResponse,
   KiwoomDailyChartResponse,
@@ -51,6 +60,7 @@ import type {
   KiwoomUsBalanceResponse,
   KiwoomUsDailyChartResponse,
   KiwoomUsExchangeResponse,
+  KiwoomUsFxRateResponse,
   KiwoomUsHoldingRaw,
   KiwoomUsTradeHistoryResponse,
 } from "./types";
@@ -393,6 +403,23 @@ export class KiwoomProvider implements BrokerProvider {
     }
 
     return quotes;
+  }
+
+  /**
+   * Spot USD/KRW from the US exchange-rate endpoint (ust31301). Market data is
+   * not account-scoped, so it reuses any valid credential like quotes do.
+   * `exch_tp=2` is USD→KRW (1 would be KRW→USD).
+   */
+  async getFxRate(base: string, quote: string, date: string): Promise<FxRate | null> {
+    if (base !== USD || quote !== KRW) return null;
+
+    const client = this.quoteClient();
+    const response = await client.request<KiwoomUsFxRateResponse>(
+      KIWOOM_API_IDS.usFxRate,
+      KIWOOM_PATHS.usFxRate,
+      { exch_tp: "2" },
+    );
+    return mapUsFxRate(response.body, date, base, quote);
   }
 }
 

@@ -12,6 +12,7 @@ export const KIWOOM_PATHS = {
   usAccount: "/api/us/acnt",
   usChart: "/api/us/chart",
   usStockInfo: "/api/us/stkinfo",
+  usFxRate: "/api/us/exchange",
 } as const;
 
 export const KIWOOM_API_IDS = {
@@ -27,6 +28,7 @@ export const KIWOOM_API_IDS = {
   usTradeHistory: "ust21100",
   usExchange: "usa10098",
   usDailyChart: "usa06012",
+  usFxRate: "ust31301",
 } as const;
 
 export function normalizeKiwoomEnv(value: string | undefined): KiwoomEnvironment {

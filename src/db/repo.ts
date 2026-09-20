@@ -2,6 +2,7 @@ import type {
   AccountConfig,
   BalanceSummary,
   DailyQuote,
+  FxRate,
   HoldingSnapshot,
   ProviderAccount,
   TradeFill,
@@ -259,6 +260,42 @@ export async function upsertQuotes(
             quote.provider,
             quote.source,
             JSON.stringify(quote.raw),
+          ),
+      ),
+    );
+  }
+}
+
+export async function upsertFxRates(
+  db: D1Database,
+  rates: readonly FxRate[],
+): Promise<void> {
+  if (rates.length === 0) return;
+
+  for (const group of chunk(rates, BATCH_SIZE)) {
+    await db.batch(
+      group.map((rate) =>
+        db
+          .prepare(
+            `INSERT INTO fx_rates (
+               base_currency, quote_currency, date, rate,
+               provider, source, raw_json, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+             ON CONFLICT (base_currency, quote_currency, date) DO UPDATE SET
+               rate = excluded.rate,
+               provider = excluded.provider,
+               source = excluded.source,
+               raw_json = excluded.raw_json,
+               updated_at = datetime('now')`,
+          )
+          .bind(
+            rate.base,
+            rate.quote,
+            rate.date,
+            rate.rate,
+            rate.provider,
+            rate.source,
+            JSON.stringify(rate.raw),
           ),
       ),
     );
