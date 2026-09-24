@@ -1,177 +1,138 @@
 # asset-tracker
 
-Cloudflare Worker that syncs brokerage account data into D1 on a daily schedule.
-KIS (한국투자증권) and Kiwoom (키움증권) are supported providers; the core is
-provider/broker agnostic so more brokers and countries can be added without
-touching the sync engine.
+Cloudflare Worker가 증권 계좌 데이터를 D1에 매일 동기화한다. 지원 provider는
+**KIS(한국투자증권)**, **키움증권**, **토스증권**이며, 코어는 **provider-agnostic**이라
+sync 엔진을 건드리지 않고 broker/국가를 추가할 수 있다.
 
-## 현재 상태 (2026-09-20)
+변경 이력은 [`CHANGELOG.md`](./CHANGELOG.md) 참고.
 
-계좌별 KIS 자격증명 지원으로 전환하고 원격 배포까지 완료. KIS는 **계좌마다 별도의
-appkey/appsecret**이 필요하므로, 이를 `KIS_CREDENTIALS` secret(계좌 external id → 키 JSON)으로
-관리한다.
+## 동작
 
-### 완료된 것
+매일(그리고 수동 실행 시):
 
-- 계좌별 자격증명: `KIS_CREDENTIALS` JSON secret, 계좌별 `KisClient`/토큰 캐시 분리
-  (`kis:token:<env>:<credId>`), 계좌 미지정 시세는 첫 계좌 키 재사용.
-- 로컬 도구 `scripts/kis-accounts.ts`: `.kis-credentials.json` 기반 계좌별 검증/시드 SQL 생성
-  (`--sql`은 시크릿 없이 stdout, 진행 로그는 stderr). `--no-trades`로 계좌별 체결 조회 비활성화.
-  `pnpm kis:secret:put`으로 secret 업로드.
-- `meta.trades = false`인 계좌는 체결 조회를 건너뛴다(provider-agnostic). 퇴직연금 계좌
-  (`11111111-29`)에 적용되어 실행 status가 `success`로 유지됨.
-- 구 단일 app key(appkey/appsecret) 방식은 코드·로컬 데이터·원격 secret에서 완전히 제거됨.
-- 3개 계좌 원격 D1 등록, `KIS_CREDENTIALS`/`ADMIN_TOKEN` secret 업로드, Worker 배포 및
-  원격 `POST /sync` 검증 완료.
-- `pnpm test` 34 passed, `pnpm typecheck` 통과.
+1. D1에서 활성 계좌를 로드한다.
+2. 계좌별 **일일 스냅샷**을 저장한다: 현금/예수금 요약 + 모든 보유 종목(수량, 평균단가,
+   평가금액, 손익).
+3. 최근 7일 롤링 윈도우의 **수량 변동 체결(매수/매도)만** 수집한다. 입출금·배당 등 현금
+   이벤트는 무시한다.
+4. 보유 종목별 **일봉 OHLC**를 **종목당 한 번만**(여러 broker가 같은 종목을 보유해도)
+   가져오며, **KRX 정규장**(비수정가)에 고정한다.
+5. **별도 FX 태스크**가 자체 크론으로 USD/KRW 시장 기준환율(수출입은행 매매기준율)을
+   `fx_rates`에 기록한다. 보유와 무관하며 `POST /sync/fx`로 단독 실행할 수 있고, 실패해도
+   스냅샷에 영향을 주지 않는다.
 
-### 키움증권 추가 (2026-09-20)
+같은 날짜로 재실행하면 그날 스냅샷을 덮어쓴다(`INSERT ... ON CONFLICT DO UPDATE`).
+보유는 통째로 교체되어 매도된 포지션이 사라진다.
 
-- `src/providers/kiwoom/` 추가, `registry`에 등록. 잔고 `kt00018` + 예수금 `kt00001`,
-  체결 `kt00015`(위탁종합거래내역, 날짜 범위 1회), 일봉 `ka10081`(`upd_stkpc_tp=0`, 비수정).
-  금현물 계좌는 잔고 `kt50020`·체결 `kt50032`·일봉 `ka50081`, `market="KRX-GOLD"`.
-- IP 화이트리스트 대응: squid forward proxy는 Worker에서 사용 불가(workerd #6903) →
-  VPS `kiwoom.proxy.example.com`에 Caddy 리버스 프록시(`deploy/caddy/kiwoom.caddy`),
-  Worker는 `KIWOOM_BASE_URL` + `X-Kiwoom-Relay` 시크릿으로 호출.
-- 계좌 발견(`ka00001`)로 6개 전부 등록(주식 5 + 금현물 1, `meta.product="gold"`).
-  원격 `POST /sync?provider=kiwoom` 성공(보유 1, 일봉 5, 60일 체결 6). 체결 조회는
-  일자별 `kt00007` 대신 범위 조회 `kt00015`/`kt50032`로 전환해 Worker 서브리퀘스트
-  한도(50)를 회피.
-- `pnpm test` 64 passed, `pnpm typecheck` 통과.
+## Providers
 
-### 토스증권 추가 (2026-09-25)
+### KIS (한국투자증권)
 
-- `src/providers/toss/` 추가, `registry`에 등록. **사용자당 단일 OAuth2 client**
-  (`TOSS_CREDENTIALS={clientId,clientSecret}`) + `X-Tossinvest-Account: <accountSeq>`
-  헤더. 한 계좌가 KR+US를 함께 보유하므로 **두 행**으로 등록:
-  `<accountNo>`(KRX) / `<accountNo>-us`(US, `meta.product="us"`).
-- 매핑: 보유 `GET /api/v1/holdings`(시장별 필터, `Price{krw,usd}` 합산), 예수금은
-  `GET /api/v1/buying-power`(`cashBuyingPower`)로 **근사**(순자산 = 주식+현금 파생,
-  없는 통화 합계는 0), 체결은 `GET /api/v1/orders?status=CLOSED`(커서 페이징,
-  `execution` 사용), 일봉은 `GET /api/v1/candles?interval=1d&adjusted=false`.
-- IP 허용 필요 → 키움과 동일하게 Caddy 리버스 프록시
-  (`deploy/caddy/toss.caddy`, `TOSS_BASE_URL`, `X-Toss-Relay`/`TOSS_RELAY_SECRET`).
-- 주의: Open API로 접수 가능한 호가유형만 `orders`에 노출(시간외 등 누락), 토큰은
-  클라이언트당 1개(`token-revoked`), KR 시세는 통합(KRX+NXT)일 수 있음.
-- 계좌 등록: `pnpm toss:accounts -- --sql > seeds/accounts.sql`.
-- `pnpm test` 130 passed, `pnpm typecheck` 통과.
+- **자격증명**: 계좌마다 별도의 appkey/appsecret가 필요하다. `KIS_CREDENTIALS` JSON
+  secret(계좌 external id → 키)으로 관리하며, `externalId`(예: `12345678-01`)로 매칭하고
+  없으면 8자리 `CANO`로 매칭한다.
+- **토큰**: 계좌별 KV 캐시(`kis:token:<env>:<credId>`, `credId`는 appkey SHA-256 앞자리),
+  만료 1시간 전 갱신. appkey당 1분에 1회만 발급 가능.
+- **엔드포인트**: 잔고 `inquire-balance`(`TTTC8434R`), 체결 `inquire-daily-ccld`
+  (`TTTC0081R`), 일봉 `inquire-daily-itemchartprice` (`FHKST03010100`).
+- **시세 정책**: 비수정 일봉(`FID_ORG_ADJ_PRC=1`), `FID_COND_MRKT_DIV_CODE=J`(KRX만;
+  `NX`=NXT, `UN`=통합) → KRX 15:30 종가. 체결은 `EXCG_ID_DVSN_CD=ALL`로 NXT 포함.
+- **체결은 best-effort**: 계좌 단위로 실패해도 스냅샷은 유지된다. `APTR0058`(계좌-키
+  불일치), `APBK1744`(퇴직연금 미지원) 등은 해당 계좌를 `meta.trades=false`로 표시해
+  엔드포인트를 건너뛴다.
+- rate limit ~20 TPS(appkey), 호출은 300ms로 직렬화하고 `EGW00201`은 백오프 재시도.
+- 실전 도메인 `https://openapi.koreainvestment.com:9443`, 모의(`vts`)는 `KIS_ENV=vts`.
+- `DEBUG_KIS=1`로 요청 로깅(시크릿 미노출).
 
-### 시세 중복 제거 + KRX 정규장 정렬 (2026-09-20)
+### 키움증권
 
-- **종목별 단일 시세 출처**: 여러 증권사가 같은 종목을 보유해도 시세는 한 번만
-  조회한다. `src/sync/quoteSources.ts`가 종목별 후보 provider를
-  `quoteProviderPriority()`(registry 순서: `kis` → `kiwoom`)로 정렬하고, 첫 후보로
-  묶어 조회한다. 실패하면 해당 종목만 다음 후보로 폴백한다.
-- **KRX 정규장 고정**: KIS `FID_COND_MRKT_DIV_CODE=J`(KRX), Kiwoom plain 6자리
-  코드(=`_NX`/`_AL` 접미사 제거)만 사용. KRX/NXT 프리·애프터마켓은 제외하며 KRX
-  15:30 종가가 공식 종가다. 시세는 비수정주가(KIS `FID_ORG_ADJ_PRC=1`, Kiwoom
-  `upd_stkpc_tp=0`).
-- **NXT 체결 포함**: KIS 체결 `EXCG_ID_DVSN_CD=ALL`, Kiwoom 체결 `dmst_stex_tp=%`.
-- **실 API 확인(2026-09-20)**: Kiwoom `kt00018`은 `dmst_stex_tp=KRX`/`NXT`에서 보유
-  집합·수량이 동일(예: `005930:10`) — 거래소 구분은 평가 시세 선택일 뿐이라 KRX
-  유지로 누락 없음. KIS 일봉은 `J`와 `NX`의 OHLC·거래량이 다르고(예: 005930
-  2026-09-18 O 261,000 vs 259,500, V 17.49M vs 6.58M) 종가도 갈릴 때가 있어(000660
-  2026-09-17 1,745,000 vs 1,766,000) KRX 고정이 실제로 의미가 있다.
-- `pnpm test` 75 passed, `pnpm typecheck` 통과.
+- **자격증명**: 계좌별 appkey/appsecret, `KIWOOM_CREDENTIALS` JSON. 해석 순서는
+  `externalId` → `meta.acctNo` → `meta.credKey`. 토큰 KV 캐시
+  (`kiwoom:token:<env>:<credId>`), `expires_dt` 전 갱신, `8005`/`8103` 시 1회 재발급.
+- **IP 허용 + Caddy**: `KIWOOM_BASE_URL`(Caddy vhost) + `X-Kiwoom-Relay`
+  (`KIWOOM_RELAY_SECRET`). 자세한 내용은 아래 "IP 허용과 리버스 프록시" 참고.
+- **엔드포인트**: 잔고 `kt00018` + 예수금 `kt00001`, 체결 `kt00015`(위탁종합거래내역,
+  계좌당 날짜 범위 1회), 일봉 `ka10081`(`upd_stkpc_tp=0`).
+- **금현물(금 spot)**: 잔고 `kt50020`, 체결 `kt50032`, 일봉 `ka50081`,
+  `market="KRX-GOLD"`, `meta.product="gold"`.
+- **미국주식**: 별도 계좌행(`<acctNo>-us`, `country=US`, `currency=USD`,
+  `meta.product="us"`). 엔드포인트 `ust21070`(원장잔고), `ust21100`(거래내역),
+  `usa06012`(일봉), `usa10098`(거래소 ND/NY/NA). 경로 `/api/us/*`, 목록 키 `result_list`.
+  - KST 07:00 실행은 미국 정규장 이후지만 시간외 구간이라, 보유평가를 `usa06012` 정규장
+    종가(캔들 `dt == date`)로 재계산한다.
+  - `ust21100`은 `krw_repl_skip_yn="N"`이 실제로 필수(`1511`), `usa06012`의 `strt_dt`는
+    **기준일(포함)**이라 `from`이 아니라 `date`를 보낸다(아니면 구간이 조용히 빈다).
+  - 소수점(소수점매매) 보유는 REST 미지원(`poss_qty`는 정수). 소수점 수량은 체결
+    `ust21100`의 `deal_qty`에만 내려오고, 소수점 가치는 집계 응답에 포함된다.
+- **KRX/NXT**: 잔고 `dmst_stex_tp=KRX`(평가 시세 선택용, 보유 집합은 거래소 무관), 체결
+  `dmst_stex_tp=%`(전체), 일봉은 plain 6자리(KRX; `_NX`/`_AL` 제거).
+- 논리 오류는 HTTP 200 + `return_code != 0`. 빈 체결 구간은 `501724`
+  (관련자료가없습니다)로 간주해 무시.
 
-### 키움 미국주식 추가 (2026-09-20)
+### 토스증권
 
-- 별도 계좌행으로 등록: `external_id="<acctNo>-us"`, `country="US"`, `currency="USD"`,
-  `meta.product="us"` (금현물과 동일한 패턴). 토큰=계좌라 자격증명은 그대로 해석된다.
-- 엔드포인트: 잔고 `ust21070`(원장잔고), 체결 `ust21100`(미국주식 거래내역, 날짜 범위 1회),
-  일봉 `usa06012`(`upd_stkpc_tp=0`, `exrt_appl_tp=0`), 거래소 조회 `usa10098`.
-  경로는 `/api/us/acnt`·`/api/us/chart`·`/api/us/stkinfo`이고 목록 키는 `result_list`다.
-- 잔고·체결에 거래소 정보가 없어(`stex_nm="미국"`) 시세 조회 시 `usa10098`로
-  `stex_tp`(ND/NY/NA)를 해석한다(인메모리 캐시). `market="US"` 단일 시장.
-- **정규장 종가 고정**: KST 07:00 실행은 미국 정규장(마감 익일 KST 05:00/06:00) 이후지만
-  시간외 구간이라, 보유평가를 `usa06012` 정규장 종가(캔들 `dt == date`)로 재계산한다.
-- 라이브 확인(2026-09-20): `ust21100`은 `krw_repl_skip_yn="N"`이 실제로 필수(`1511`),
-  `usa06012`의 `strt_dt`는 **기준일(포함)**이라 `from`이 아니라 `date`를 보내야 한다(아니면
-  구간이 조용히 비어버림). 거래소를 잘못 주면 `1903`(QLD는 `ND`가 아니라 `NY`).
-- **소수점(소수점매매) 보유는 미지원(2026-09-20, 키움 확인)**: `ust21070`/`ust21170`의
-  `poss_qty`는 정수 주식만 준다(예: QLD 22, SPYM 23). 소수점 수량은 체결 `ust21100`의
-  `deal_qty`에만 소수점으로 내려오고, 소수점 *가치*는 집계(`ust21120`/`ust21121`/`ust21131`/
-  `ust21132`)에 포함돼 `ust21070` 합계보다 크다(관측 4063.72 vs 4247.50 USD). 키움 REST가
-  소수점 잔고를 지원하면 `mapUsHolding`/`ust21070` 파싱만 확장하면 된다(`quantity`는 REAL).
-- **스케줄 분리**: KRX/금현물은 KST 20:30(UTC Mon–Fri 11:30), 미국은 KST 07:00
-  (UTC Mon–Fri 22:00, `0 22 * * 2-6`)에 별도 실행. US 실행은 ET 세션 날짜(`etDate`)를 쓴다.
-- US 티커는 `stripSymbol`을 태우지 않는다(7자 `A/J/Q` 티커 손상 방지).
-- `pnpm test` 88 passed, `pnpm typecheck` 통과.
+- **자격증명**: 사용자당 **단일 OAuth2 client**(`TOSS_CREDENTIALS={clientId,clientSecret}`).
+  계좌 관련 호출은 `X-Tossinvest-Account: <accountSeq>`(meta.accountSeq) 헤더가 필요하다.
+  토큰은 KV 캐시(`toss:token:<env>:<credId>`), **클라이언트당 1개**만 유효해 재발급하면
+  이전 토큰이 무효(`token-revoked`) → 토큰 오류 시 1회 재발급.
+- **계좌 = 2행**: 한 계좌가 KR+US를 함께 보유하므로 `<accountNo>`(KRX) /
+  `<accountNo>-us`(US, `meta.product="us"`)로 등록한다.
+- **엔드포인트**: 보유 `GET /api/v1/holdings`, 예수금(근사) `GET /api/v1/buying-power`,
+  체결 `GET /api/v1/orders?status=CLOSED`(커서 페이징, `execution`), 일봉
+  `GET /api/v1/candles?interval=1d&adjusted=false`. 경로 접두사는 `/api/v1`.
+- **순자산 파생**: Toss에는 총자산 필드가 없어 `순자산 = 주식 평가금액 + 현금
+  (buying-power 근사)`로 계산한다. Toss가 생략한 통화 합계(해당 시장 보유 없음)는 0으로
+  저장한다.
+- **IP 허용 + Caddy**: `TOSS_BASE_URL` + `X-Toss-Relay`(`TOSS_RELAY_SECRET`). WTS >
+  Open API > 허용 IP 관리에 VPS IP를 등록해야 한다.
+- 응답은 성공 시 `{ result }`, 실패 시 `{ error: { code, message, requestId } }`.
+  금액·수량은 JSON **문자열**로 온다. `profitLoss.rate`는 소수 비율(0.1077 = 10.77%)이라
+  퍼센트로 변환해 저장한다.
+- 주의: Open API로 접수 가능한 호가유형만 `orders`에 노출(장전/장후 시간외 등 누락) →
+  체결 이력이 불완전할 수 있다(best-effort). rate limit은 client × 그룹(`ACCOUNT` 1 TPS,
+  `ASSET` 5, `MARKET_DATA_CHART` 20)이고 `429` + `Retry-After`. KR 시세는 통합
+  (KRX+NXT)일 수 있어 KRX 종가 정책과 일치하는지 확인이 필요하다.
 
-### 환율 원천: 한국수출입은행 매매기준율
+### FX (한국수출입은행)
 
-- **별개 태스크**: `src/sync/fx.ts`(`syncFxRates`)가 환율 조회·보관을 담당한다.
-  보유종목과 무관하게 **자체 크론(KST 월–금 12:00 = UTC `0 3 * * 2-6`)** 으로 돌고
-  `POST /sync/fx`로 수동 실행할 수 있다. 환율 실패는 보유 스냅샷에 영향을 주지 않는다.
+- **별개 태스크**: `src/sync/fx.ts`(`syncFxRates`)가 조회·보관을 담당한다. 자체 크론
+  **KST 월–금 12:00**(UTC `0 3 * * 2-6`)으로 돌고 `POST /sync/fx`로 수동 실행할 수 있다.
+  보유와 무관하며, 실패해도 스냅샷에 영향을 주지 않는다.
 - **출처**: 한국수출입은행 Open API(`src/fx/koreaexim.ts`)의 **매매기준율**
-  (`deal_bas_r`, `data=AP01`, `oapi.koreaexim.go.kr`). 키움 `ust31301`(환전 적용환율
-  =가환율)은 시장 기준환율이 아니라 평가용으로 부적합해 **제거**했다.
-- **시점**: 고시는 영업일 **오전 11시 전후**라 KST 12:00에 수집한다. 영업일 11시
-  이전·주말·공휴일은 데이터가 없어 **직전 영업일로 최대 7일 역추적**한다.
-- **기준일**: `fx_rates.date`는 관측일이 아니라 **실제 고시(영업)일**이다. US 보유는
-  ET 세션 날짜로 스냅샷되므로 KST 고시일과 하루 어긋날 수 있다.
-- **저장**: `fx_rates` (`base_currency`, `quote_currency`, `date`, `rate`, `provider`,
-  `source`, `raw_json`; `UNIQUE (base, quote, date)`), `provider="koreaexim"`,
-  `source="koreaexim-deal-bas-r"`. 현재 USD→KRW만 매핑한다.
-- **source-agnostic**: 시장 FX 소스는 `BrokerProvider`가 아니라 `FxSource`(계좌 없음)
-  이며 `src/fx/registry.ts`에 등록한다. 브로커/`koreaexim` 필드명은 `src/fx/` 밖으로
-  새지 않는다. 인증키는 `KOREAEXIM_API_KEY`(wrangler secret)다.
-- `pnpm test` 111 passed, `pnpm typecheck` 통과.
+  (`deal_bas_r`, `data=AP01`, `oapi.koreaexim.go.kr`). 고시는 영업일 오전 11시
+  전후라 KST 12:00에 수집하며, 영업일 11시 이전·주말·공휴일은 데이터가 없어 **직전
+  영업일로 최대 7일 역추적**한다.
+- **저장**: `fx_rates`(`UNIQUE (base, quote, date)`), `provider="koreaexim"`,
+  `source="koreaexim-deal-bas-r"`. `date`는 관측일이 아니라 **실제 고시(영업)일**이다.
+  현재 USD→KRW만 매핑한다.
+- **source-agnostic**: 시장 FX 소스는 `BrokerProvider`가 아니라 `FxSource`(계좌 없음)이며
+  `src/fx/registry.ts`에 등록한다. 브로커/`koreaexim` 필드명은 `src/fx/` 밖으로 새지
+  않는다. 인증키는 `KOREAEXIM_API_KEY`(wrangler secret).
 
-### 계좌 검증/동기화 결과 (2026-09-20, 로컬·원격)
+### IP 허용과 리버스 프록시 (키움·토스)
 
-| 계좌 | 잔고 조회 | 체결내역 조회 |
-| --- | --- | --- |
-| `22222222-01` | 정상 (예수금 N원, 보유 0) | 정상 (0건) |
-| `33333333-22` | 정상 (예수금 N원, 보유 0) | 정상 (0건) |
-| `11111111-29` | 정상 (보유 1, 평가 N원) | `APBK1744`로 건너뜀 (`meta.trades=false`) |
+키움·토스는 **호출 IP 허용목록**이 필요하다. Cloudflare Worker의 egress IP는 허용목록에
+등록할 수 없고, forward proxy 터널도 프로덕션 엣지에서 동작하지 않는다
+(`cloudflare:sockets` `startTls()`는 `CONNECT` 후 SNI를 누락 — workerd #6903, `node:tls`도
+동일). 그래서 **고정 IP VPS의 Caddy 리버스 프록시**로 우회한다:
 
-- 계좌별 키로 전환한 뒤 이전 `INVALID_CHECK_ACNO` / `APTR0058` 문제가 모두 해소됨.
-- `11111111-29`는 퇴직연금계좌라 `inquire-daily-ccld`가 원천 미지원(`APBK1744`).
-  `meta.trades=false`로 체결 조회를 건너뛰어 실행 status가 `success`로 유지된다.
-- `22222222-01`은 예수금 N원·보유 0으로 사실상 비어 있음 → 실제 관리 대상인지 확인 필요.
+```
+Worker --HTTPS--> Caddy (허용 IP) --HTTPS--> api.kiwoom.com / openapi.tossinvest.com
+```
 
-### 남은 선택 사항
+- `deploy/caddy/kiwoom.caddy`, `deploy/caddy/toss.caddy`가 각 provider vhost다.
+  VPS `/etc/caddy/Caddyfile`은 `import /etc/caddy/conf.d/*.caddy`를 포함하고, 각 broker
+  파일을 복사한다. Caddy가 공인 인증서를 자동 발급·갱신한다(DNS-only A 레코드).
+- Worker는 `KIWOOM_BASE_URL`/`TOSS_BASE_URL`로 Caddy를 호출하고, `X-Kiwoom-Relay`/
+  `X-Toss-Relay`(각 relay secret)를 Caddy가 검사한다. KIS에는 필요 없다.
 
-- 관리 대상이 아니면 `22222222-01`을 `active = 0`으로 내리거나 시드에서 제거.
-
-메모:
-- 자격증명은 `KIS_CREDENTIALS`(계좌별 JSON) 하나만 사용한다.
-- 체결 조회를 지원하지 않는 계좌는 `meta.trades = false`로 표시해 건너뛴다(아래 참고).
-- 원격 KV는 비어 있으므로 첫 배포 직후 첫 sync에서 토큰 발급이 필요하다. KIS 토큰은
-  appkey당 1분에 1회만 발급되니, 직전에 로컬 `kis:accounts`를 돌렸다면 1분 뒤 재시도.
-- `pnpm kis:accounts`는 계좌별 appkey(마스킹)를 표시하며, `--sql`은 시크릿 없이 accounts 행만 생성.
-- `DEBUG_KIS=1`(워커는 `--var DEBUG_KIS:1`)로 KIS 요청 로깅(시크릿 미노출).
-- 로컬 토큰은 `.kis-token-cache.json`(gitignore)에 자격증명별로 캐시되어 재발급 알림/1분 제한을 피함.
-
-## What it does
-
-Once a day (and on demand) it:
-
-1. Loads active accounts from D1.
-2. For each account, stores a **daily snapshot**: cash/deposit summary plus every
-   holding (symbol, quantity, average price, valuation, P/L).
-3. Fetches **quantity-changing trades only** (buys/sells) over a rolling 7-day
-   window. Deposits, dividends, and other cash events are ignored.
-4. Fetches **daily OHLC** quotes for every held instrument — **once per
-   instrument**, even if several brokers hold it, pinned to the **KRX regular
-   session** (unadjusted prices).
-5. Runs a **separate FX task** on its own cron that records the USD/KRW market
-   reference rate (Korea Eximbank 매매기준율) in `fx_rates`. It is independent of
-   holdings and can be run on its own via `POST /sync/fx`; a failure never affects
-   the snapshot.
-
-Re-running for the same day overwrites that day's snapshot (`INSERT ... ON
-CONFLICT DO UPDATE`); holdings for the day are replaced wholesale so sold
-positions disappear.
-
-## Architecture
+## 아키텍처
 
 ```
 src/
   index.ts                 Worker entry: scheduled (cron) + fetch (manual/API)
   env.ts                   Bindings & secrets
-  domain/types.ts          Normalized model + BrokerProvider interface
+  domain/types.ts          Normalized model + BrokerProvider / FxSource interfaces
   providers/registry.ts     provider id -> instance (cached per isolate)
   providers/kis/            KIS implementation
     credentials.ts          KIS_CREDENTIALS parsing + per-account lookup
@@ -184,7 +145,7 @@ src/
     auth.ts                 Token issue + per-credential KV cache (expires_dt)
     client.ts               api-id header, return_code checks, pagination
     tr-ids.ts               API ids, paths, base URLs
-    endpoints/domestic.ts   Raw Kiwoom fields -> normalized domain types
+    endpoints/              domestic / gold / us -> normalized types
   providers/toss/           Toss Securities implementation (OAuth2 + accountSeq)
     credentials.ts          TOSS_CREDENTIALS (single client) parsing
     auth.ts                 OAuth2 token issue + per-client KV cache
@@ -199,58 +160,53 @@ src/
     fx.ts                    Standalone FX task: fetch/record the reference rate
 ```
 
-The sync engine only talks to the `BrokerProvider` interface, so a new broker is
-a new folder under `src/providers/<id>/` plus one line in the registry.
+sync 엔진은 `BrokerProvider` 인터페이스만 알기 때문에, 새 broker는
+`src/providers/<id>/` 폴더 + registry 한 줄이면 된다.
 
-## Data model (D1)
+## 데이터 모델 (D1)
 
-| Table | Grain | Notes |
+| 테이블 | 그레인 | 비고 |
 |---|---|---|
-| `accounts` | provider + env + external_id | runtime account registry |
-| `instruments` | market + symbol | stable instrument anchor |
-| `account_snapshots` | account + date | cash/deposit + valuation totals |
-| `holdings` | account + date + market + symbol | daily positions |
+| `accounts` | provider + env + external_id | 런타임 계좌 레지스트리 |
+| `instruments` | market + symbol | 안정적인 종목 기준 |
+| `account_snapshots` | account + date | 현금/예수금 + 평가 합계 |
+| `holdings` | account + date + market + symbol | 일별 포지션 |
 | `price_daily` | market + symbol + date | OHLCV |
-| `trades` | account + date + external_id + side | buy/sell fills |
-| `fx_rates` | base + quote + date | market reference FX (USD/KRW), source-agnostic |
-| `sync_runs` | run | execution history / status |
+| `trades` | account + date + external_id + side | 매수/매도 체결 |
+| `fx_rates` | base + quote + date | 시장 기준환율(USD/KRW), source-agnostic |
+| `sync_runs` | run | 실행 이력 / 상태 |
+| `sync_errors` | run + scope | 런별 구조화 오류(status/attempts/symbol 등) |
 
-## Cloudflare resources
-
-`wrangler.jsonc` is **gitignored** (it holds your account-specific ids and proxy
-host); commit-safe defaults live in `wrangler.example.jsonc`:
-
-```bash
-cp wrangler.example.jsonc wrangler.jsonc   # then fill in the ids/URLs
-```
-
-It wires:
+## Cloudflare 리소스
 
 - Worker: `asset-tracker`
 - D1: `asset-tracker-db` (binding `DB`) — `<d1-database-id>`
 - KV: `asset-tracker-kv` (binding `CACHE`) — `<kv-namespace-id>`
-- Cron: `30 11 * * 2-6` (UTC Mon-Fri 11:30 = KST Mon-Fri 20:30) for KRX/gold,
-  `0 22 * * 2-6` (UTC Mon-Fri 22:00 = KST Tue-Sat 07:00) for US, and
-  `0 3 * * 2-6` (UTC Mon-Fri 03:00 = KST Mon-Fri 12:00) for FX. Cloudflare uses
-  Quartz weekdays: 1=Sunday … 7=Saturday, so Mon-Fri is `2-6`.
+- Cron:
+  - `30 11 * * 2-6` (UTC Mon-Fri 11:30 = KST Mon-Fri 20:30) — KRX/금
+  - `0 22 * * 2-6` (UTC Mon-Fri 22:00 = KST Tue-Sat 07:00) — US
+  - `0 3 * * 2-6` (UTC Mon-Fri 03:00 = KST Mon-Fri 12:00) — FX
+  - Cloudflare는 Quartz 요일(1=일 … 7=토)이라 Mon–Fri는 `2-6`.
 
-## Setup
+`wrangler.jsonc`는 **gitignored**(계정별 id·프록시 호스트 보관)이고, 커밋 가능한 기본값은
+`wrangler.example.jsonc`에 있다.
+
+## 설정 (Setup)
 
 ```bash
 pnpm install
 
-# Bindings config (gitignored; holds D1/KV ids and the Kiwoom proxy host)
-cp wrangler.example.jsonc wrangler.jsonc   # then fill in the ids/URLs
+# 바인딩 설정 (gitignored; D1/KV id와 프록시 호스트 포함)
+cp wrangler.example.jsonc wrangler.jsonc   # 값 채우기
 
-# Secrets (see below)
-cp .dev.vars.example .dev.vars   # then fill in values
+# 시크릿
+cp .dev.vars.example .dev.vars             # 값 채우기
 
-# Apply schema
+# 스키마 적용
 pnpm db:migrate:local
 pnpm db:migrate:remote
 
-# Per-account credentials (see "Credentials")
-# Create .kis-credentials.json, then register accounts (see "Accounts")
+# provider별 자격증명 준비 후 계좌 등록 (아래 "계좌 등록" 참고)
 pnpm kis:accounts -- --accounts 12345678-01 --sql > seeds/accounts.sql
 pnpm db:seed:remote
 pnpm kis:secret:put
@@ -258,242 +214,134 @@ pnpm kis:secret:put
 pnpm run deploy
 ```
 
-## Credentials (per account) + secrets
+## 보안/시크릿
 
-KIS issues a **separate app key per account**, so credentials are stored as one
-JSON object keyed by account external id (`CANO-PRDT`):
+이 저장소는 **공개**다. 민감정보는 커밋하지 않는다. 자세한 규칙은
+[`SECURITY.md`](./SECURITY.md)와 `AGENTS.md`의 "Secrets & PII" 참고.
 
-```json
-{
-  "22222222-01": { "appkey": "...", "appsecret": "..." },
-  "33333333-22": { "appkey": "...", "appsecret": "..." }
-}
-```
+시크릿은 **wrangler secret**으로만 저장하고, 로컬에서는 gitignored 파일
+(`.dev.vars`, `*.credentials.json`, 토큰 캐시)을 쓴다. `wrangler secret put`은 **배포된
+Worker**에만 적용되고, 로컬(`wrangler dev`)은 `.dev.vars`를 읽는다.
 
-Keys are matched by `externalId` (`22222222-01`), then by the 8-digit `CANO`
-(`22222222`). The file is the source of truth for local tooling and the secret
-upload:
-
-```bash
-# .kis-credentials.json (gitignored)
-pnpm kis:secret:put          # wrangler secret put KIS_CREDENTIALS < .kis-credentials.json
-```
-
-`wrangler secret put` writes to the **deployed** Worker only; local runs read
-`.dev.vars`. For local dev add the same JSON as a single-line
-`KIS_CREDENTIALS='{...}'` entry in `.dev.vars`.
-
-| | Local | Production |
+| 시크릿 | 로컬 | 프로덕션 |
 |---|---|---|
-| `KIS_CREDENTIALS` | `.dev.vars` (or `.kis-credentials.json` for `kis:accounts`) | `pnpm kis:secret:put` |
+| `KIS_CREDENTIALS` | `.kis-credentials.json` / `.dev.vars` | `pnpm kis:secret:put` |
+| `KIWOOM_CREDENTIALS` | `.kiwoom-credentials.json` / `.dev.vars` | `pnpm kiwoom:secret:put` |
+| `KIWOOM_RELAY_SECRET` | `.dev.vars` | `pnpm exec wrangler secret put KIWOOM_RELAY_SECRET` |
+| `TOSS_CREDENTIALS` | `.toss-credentials.json` / `.dev.vars` | `pnpm toss:secret:put` |
+| `TOSS_RELAY_SECRET` | `.dev.vars` | `pnpm exec wrangler secret put TOSS_RELAY_SECRET` |
+| `KOREAEXIM_API_KEY` | `.dev.vars` | `pnpm exec wrangler secret put KOREAEXIM_API_KEY` |
 | `ADMIN_TOKEN` | `.dev.vars` | `pnpm exec wrangler secret put ADMIN_TOKEN` |
 
-`.dev.vars` and `.kis-credentials.json` are gitignored. `KIS_ENV` (`prod`/`vts`)
-is a plain var in `wrangler.jsonc` and can also be set in `.dev.vars` locally.
+자격증명 형식:
 
-```bash
-cp .dev.vars.example .dev.vars
-# edit .dev.vars: KIS_CREDENTIALS, KIS_ENV, ADMIN_TOKEN
-pnpm db:migrate:local
-pnpm dev
-# then, against the local worker:
-curl -X POST http://localhost:8787/sync -H "x-admin-token: $ADMIN_TOKEN"
-```
+- **KIS** — 계좌별 키, `externalId`/`CANO`로 매칭:
+  ```json
+  { "12345678-01": { "appkey": "...", "appsecret": "..." } }
+  ```
+- **키움** — 계좌별 키, `externalId` → `meta.acctNo` → `meta.credKey`로 매칭:
+  ```json
+  { "12345678": { "appkey": "...", "appsecret": "..." } }
+  ```
+- **토스** — 사용자당 단일 client:
+  ```json
+  { "clientId": "...", "clientSecret": "..." }
+  ```
 
-## Accounts
+## 계좌 등록 (Accounts)
 
-KIS has **no "list my accounts" API** — the official samples read the account
-number from a config file. You get the account number (`CANO`, 8 digits) and
-product code (`ACNT_PRDT_CD`, usually `01`) from the KIS Developers portal's
-신청현황 screen.
+계좌는 D1 `accounts` 행으로 등록하고, 시드는 `pnpm db:seed:remote`로 적용한다. `alias`는
+사용자 지정 표시명이며(`resolveAccountName`: alias → name → externalId), 툴/시드는
+`alias`를 쓰지 않으므로 수동 지정값이 재등록에도 유지된다.
 
-`pnpm kis:accounts` verifies candidates against the live API using each
-account's own credentials (from `.kis-credentials.json`) and can emit seed SQL:
+- **KIS**: "계좌 목록" API가 없다. KIS Developers 포털 신청현황에서 `CANO`(8자리)와
+  `ACNT_PRDT_CD`(보통 `01`)를 확인한다. `pnpm kis:accounts`가 계좌별 자체 키로 검증하고
+  시드 SQL을 생성한다:
+  ```bash
+  pnpm kis:accounts -- --accounts 12345678-01,87654321-01 --trades
+  pnpm kis:accounts -- --cano 12345678                 # 상품코드(01,22,29,03,08) 탐색
+  pnpm kis:accounts -- --accounts 12345678-01 --sql > seeds/accounts.sql
+  ```
+- **키움**: `.kiwoom-credentials.json`의 각 키가 한 계좌에 묶여 있어 `ka00001`
+  (계좌번호조회)로 계좌번호를 찾는다. `kt00018` 실패(`400114`) 시 금현물을 탐지하고,
+  `ust21070` 성공 시 US 행을 추가한다(`--no-us`로 생략):
+  ```bash
+  pnpm kiwoom:accounts -- --sql > seeds/accounts.sql
+  ```
+- **토스**: 단일 client로 `GET /api/v1/accounts`에서 `accountSeq`/`accountNo`를 얻어
+  KRX/US 2행을 만든다:
+  ```bash
+  pnpm toss:accounts -- --sql > seeds/accounts.sql
+  ```
 
-```bash
-# Verify known accounts (uses their own keys)
-pnpm kis:accounts -- --accounts 22222222-01,33333333-22 --trades
+### 계좌별 체결 동기화 끄기
 
-# Don't know the product code? Probe the common ones (01, 22, 29, 03, 08)
-pnpm kis:accounts -- --cano 12345678
-
-# Use a non-default credentials file
-pnpm kis:accounts -- --accounts 12345678-01 --credentials-file .kis-credentials.other.json
-
-# Emit seeds/accounts.sql from the accounts that verified (no secrets in SQL)
-pnpm kis:accounts -- --accounts 12345678-01,87654321-01 --sql > seeds/accounts.sql
-
-# Mark accounts whose broker does not support trade history (sets meta.trades=false)
-pnpm kis:accounts -- --accounts 12345678-01,87654321-01 \
-  --no-trades 87654321-01 --sql > seeds/accounts.sql
-
-# Paper environment
-pnpm kis:accounts -- --cano 12345678 --env vts
-```
-
-Apply the generated file with `pnpm db:seed:remote`, then upload credentials
-with `pnpm kis:secret:put`. Register the example by hand with
-`cp seeds/accounts.example.sql seeds/accounts.sql`.
-
-### Disabling trade sync per account
-
-Some accounts cannot call the trade endpoint at all (e.g. KIS retirement-pension
-accounts return `APBK1744`). Set `"trades": false` in the account's `meta` so the
-sync engine skips it and the run stays `success`:
+체결 엔드포인트를 지원하지 않는 계좌(예: KIS 퇴직연금 `APBK1744`)는 `meta`에
+`"trades": false`를 넣어 건너뛴다. 그러면 런은 `success`로 유지된다:
 
 ```json
 { "cano": "11111111", "prdtCd": "29", "trades": false }
 ```
 
-`pnpm kis:accounts --no-trades <account>` writes this into the generated seed.
-Trades are otherwise best-effort: an unexpected failure is recorded as
-`:trades` in the run report without failing the balance snapshot.
+`pnpm kis:accounts --no-trades <account>`가 생성 시드에 이를 써 준다. 그 외 체결 수집은
+best-effort이며, 예기치 않은 실패는 런 리포트에 `:trades`로 기록되고 스냅샷은 실패하지
+않는다.
 
+## 수동 실행 / API
 
-## Manual trigger / API
-
-All admin routes require the `x-admin-token` header (the `ADMIN_TOKEN` secret).
+관리 라우트는 `x-admin-token` 헤더(`ADMIN_TOKEN`)가 필요하다.
 
 ```bash
-# Health (no auth)
-curl https://asset-tracker.<subdomain>.workers.dev/
+# Health (인증 불필요): 마지막 런 요약, 실패 시 503
+curl https://asset-tracker.<subdomain>.workers.dev/health
 
-# Run a sync for today
+# 오늘 동기화
 curl -X POST https://asset-tracker.<subdomain>.workers.dev/sync \
   -H "x-admin-token: $ADMIN_TOKEN"
 
-# Backfill / re-sync a specific day, wider trade window
+# 특정 날짜 재동기화, 체결 윈도우 확대
 curl -X POST "https://asset-tracker.<subdomain>.workers.dev/sync?date=2026-09-18&lookbackDays=30" \
   -H "x-admin-token: $ADMIN_TOKEN"
 
-# Inspect
+# 조회
 curl -H "x-admin-token: $ADMIN_TOKEN" .../accounts
 curl -H "x-admin-token: $ADMIN_TOKEN" .../runs
+curl -H "x-admin-token: $ADMIN_TOKEN" .../runs/<runId>
 
-# FX task on its own (KST date by default)
+# FX 단독 실행 (기본: 오늘 KST)
 curl -X POST https://asset-tracker.<subdomain>.workers.dev/sync/fx \
   -H "x-admin-token: $ADMIN_TOKEN"
 
-# Explicit date / pair / source
+# 특정 날짜/소스
 curl -X POST "https://asset-tracker.<subdomain>.workers.dev/sync/fx?date=2026-09-21&source=koreaexim" \
   -H "x-admin-token: $ADMIN_TOKEN"
 ```
 
-`POST /sync` accepts a JSON body too: `{ "date": "...", "lookbackDays": 7, "provider": "kis" }`.
-Restrict by product with `products` (comma-separated), e.g. `?products=us` for US accounts only.
-`POST /sync/fx` accepts `{ "date": "...", "source": "koreaexim", "base": "USD", "quote": "KRW" }`.
+- `POST /sync`는 JSON 바디도 받는다: `{ "date": "...", "lookbackDays": 7, "provider": "kis" }`.
+  `products`(콤마 구분)로 product 제한, 예: `?products=us`.
+- `POST /sync/fx`는 `{ "date": "...", "source": "koreaexim", "base": "USD", "quote": "KRW" }`를 받는다.
 
-## Commands
+## 명령어
 
-| Command | Purpose |
+| 명령 | 용도 |
 |---|---|
-| `pnpm dev` | local Worker |
+| `pnpm dev` | 로컬 Worker |
 | `pnpm test` | vitest |
 | `pnpm typecheck` | tsc |
-| `pnpm run deploy` | deploy (`pnpm deploy` is pnpm's built-in) |
-| `pnpm db:migrate:local` / `:remote` | apply migrations |
-| `pnpm kis:accounts -- ...` | verify KIS accounts / emit seed SQL |
-| `pnpm kis:secret:put` | upload `.kis-credentials.json` as `KIS_CREDENTIALS` |
-| `pnpm kiwoom:accounts -- ...` | discover/verify Kiwoom accounts / emit seed SQL |
-| `pnpm kiwoom:secret:put` | upload `.kiwoom-credentials.json` as `KIWOOM_CREDENTIALS` |
-| `pnpm toss:accounts -- ...` | discover/verify Toss accounts / emit seed SQL |
-| `pnpm toss:secret:put` | upload `.toss-credentials.json` as `TOSS_CREDENTIALS` |
-| `pnpm db:seed:local` / `:remote` | seed accounts |
+| `pnpm run deploy` | 배포 (`pnpm deploy`는 pnpm 내장 명령과 충돌) |
+| `pnpm db:migrate:local` / `:remote` | 마이그레이션 적용 |
+| `pnpm kis:accounts -- ...` | KIS 계좌 검증 / 시드 SQL 생성 |
+| `pnpm kis:secret:put` | `.kis-credentials.json`을 `KIS_CREDENTIALS`로 업로드 |
+| `pnpm kiwoom:accounts -- ...` | 키움 계좌 발견/검증 / 시드 SQL 생성 |
+| `pnpm kiwoom:secret:put` | `.kiwoom-credentials.json`을 `KIWOOM_CREDENTIALS`로 업로드 |
+| `pnpm toss:accounts -- ...` | 토스 계좌 발견/검증 / 시드 SQL 생성 |
+| `pnpm toss:secret:put` | `.toss-credentials.json`을 `TOSS_CREDENTIALS`로 업로드 |
+| `pnpm db:seed:local` / `:remote` | 계좌 시드 적용 |
 
-## KIS notes
+## provider / 국가 추가하기
 
-- Real domain `https://openapi.koreainvestment.com:9443`; paper (`vts`) is
-  supported by setting `KIS_ENV=vts` but the current accounts are real-only.
-- Each account has its own app key, so tokens are cached per credential in KV
-  (`kis:token:<env>:<credentialId>`, where `credentialId` is a short SHA-256 of
-  the app key) and refreshed an hour before expiry. Tokens are valid 24h and may
-  only be issued once per minute.
-- Rate limit is per app key (~20 TPS real). Calls are serialized at 300 ms and
-  `EGW00201` is retried with backoff.
-- Endpoints used: `inquire-balance` (`TTTC8434R`), `inquire-daily-ccld`
-  (`TTTC0081R`), `inquire-daily-itemchartprice` (`FHKST03010100`).
-- Prices use unadjusted daily candles (`FID_ORG_ADJ_PRC=1`) with
-  `FID_COND_MRKT_DIV_CODE=J` (KRX only; `NX`=NXT, `UN`=통합), so the close is the
-  KRX regular-session 15:30 close. Trade history sends `EXCG_ID_DVSN_CD=ALL` to
-  include NXT fills (`KRX`/`NXT`/`SOR`/`ALL`).
-- Trade history is best-effort: `inquire-daily-ccld` can fail for a single
-  account while its balance works. Examples: `APTR0058` ("처리계좌의 ID와
-  사용자정보가 상이") when an account is queried with a mismatched/stale app key
-  (fixed by using that account's own `KIS_CREDENTIALS` entry), and `APBK1744`
-  ("퇴직연금계좌는 해당 서비스가 불가합니다") for retirement-pension accounts,
-  which do not support the endpoint at all. Mark those accounts with
-  `meta.trades = false` (`pnpm kis:accounts --no-trades`) so the endpoint is
-  skipped; otherwise they still get their snapshot and only the `:trades` step is
-  reported as failed. Check with `pnpm kis:accounts -- --accounts <id> --trades`.
-- `DEBUG_KIS=1` (or `--var DEBUG_KIS:1` in `wrangler dev`) logs outgoing KIS
-  requests without secrets.
-
-## Kiwoom notes
-
-Kiwoom requires **IP whitelisting**, so Worker requests cannot go straight to
-`api.kiwoom.com`. Cloudflare Workers also cannot tunnel through a forward proxy
-reliably: `cloudflare:sockets` `startTls()` after `CONNECT` fails on the
-production edge (workerd #6903 — SNI is not sent), and `node:tls` inherits the
-same limitation. The supported setup is therefore a **Caddy reverse proxy** on
-the IP-whitelisted VPS (`deploy/caddy/kiwoom.caddy`):
-
-```
-Worker --HTTPS--> Caddy (whitelisted IP) --HTTPS--> api.kiwoom.com
-```
-
-- `KIWOOM_BASE_URL` points at the Caddy vhost
-  (`https://kiwoom.proxy.example.com`); `KIWOOM_RELAY_SECRET` is sent as the
-  `X-Kiwoom-Relay` header and checked by Caddy. Neither is needed for KIS.
-- Toss uses the same pattern: `TOSS_BASE_URL`
-  (`https://toss.proxy.example.com`) with `TOSS_RELAY_SECRET` as the
-  `X-Toss-Relay` header (`deploy/caddy/toss.caddy`). Toss also requires the VPS
-  IP in its WTS > Open API > 허용 IP 관리 allowlist.
-- The VPS `/etc/caddy/Caddyfile` should `import /etc/caddy/conf.d/*.caddy`, and
-  each broker gets its own file there (copy from `deploy/caddy/`). Caddy obtains
-  and renews the public certificate automatically (DNS-only A record).
-- Each `.kiwoom-credentials.json` entry is one app key bound to one account, so
-  `pnpm kiwoom:accounts` calls `ka00001` (계좌번호조회) to discover the account
-  number and emits seed SQL with `provider='kiwoom'`, `external_id=<acctNo>`,
-  `meta={acctNo, credKey}`.
-- Endpoints: balance `kt00018`, deposit `kt00001`, fills `kt00015` (위탁종합거래내역,
-  one date-range call per account), daily candles `ka10081` (`upd_stkpc_tp=0`,
-  unadjusted).
-- US (미국주식) endpoints: balance `ust21070` (`/api/us/acnt`), fills `ust21100`,
-  candles `usa06012` (`/api/us/chart`), exchange `usa10098` (`/api/us/stkinfo`).
-  Registered as a separate account row with `meta.product="us"`; holdings are
-  valued at the regular-session close. See "키움 미국주식 추가" above.
-- FX is fetched by the standalone task `src/sync/fx.ts` from **Korea Eximbank**
-  (`src/fx/koreaexim.ts`, `data=AP01`, `deal_bas_r` 매매기준율) and recorded in
-  `fx_rates` as USD→KRW. `date` is the actual quote (business) day; the source
-  searches back up to 7 days for the latest published day.
-- Exchange codes: daily candles use the plain 6-digit code (KRX); NXT/unified
-  candles require `_NX`/`_AL`, which `stripSymbol` removes so quotes stay KRX
-  regular-session. Fills already cover all exchanges (`dmst_stex_tp=%`), while
-  balance keeps `dmst_stex_tp=KRX` — it selects the valuation price of a single
-  exchange-agnostic position, not which positions are returned.
-- Gold-spot (금현물) accounts are detected by `pnpm kiwoom:accounts` (kt00018
-  returns `400114`; kt50020 succeeds) and stored with `meta.product="gold"`.
-  They use balance `kt50020`, fills `kt50032` (date range) and candles `ka50081`,
-  and are recorded under `market="KRX-GOLD"`.
-- This same command probes `ust21070` and, on success, emits an extra US row
-  (`<acctNo>-us`, `meta.product="us"`). Pass `--no-us` to skip that probe.
-- Kiwoom returns HTTP 200 with `return_code != 0` on logical errors; an empty
-  trade range comes back as `501724` (관련자료가없습니다) and is treated as no
-  trades. Tokens are cached per app key in KV (`kiwoom:token:<env>:<credId>`) and
-  refreshed before `expires_dt` (KST); `8005`/`8103` triggers one re-issue.
-
-```bash
-pnpm kiwoom:accounts -- --sql > seeds/accounts.sql
-pnpm db:seed:remote
-pnpm kiwoom:secret:put
-pnpm exec wrangler secret put KIWOOM_RELAY_SECRET
-pnpm run deploy
-```
-
-## Adding a provider / country
-
-1. Add `src/providers/<id>/` implementing `BrokerProvider`.
-2. Register it in `src/providers/registry.ts` (its position there sets quote
-   priority; implement `supportsMarket` so quotes route to a capable provider).
-3. Seed `accounts` rows with the new `provider`.
-4. Optionally add market/country/currency handling — all stored in the schema.
+1. `src/providers/<id>/`에 `BrokerProvider` 구현을 추가한다.
+2. `src/providers/registry.ts`에 등록한다(위치가 quote priority를 결정하므로
+   `supportsMarket`을 구현해 시세가 처리 가능한 provider로 라우팅되게 한다).
+3. 새 `provider`로 `accounts` 행을 시드한다.
+4. market/country/currency는 스키마에 이미 있으므로 별도 마이그레이션이 필요 없다.
