@@ -14,6 +14,8 @@
     "kis:secret:put": "wrangler secret put KIS_CREDENTIALS < .kis-credentials.json",
     "kiwoom:accounts": "tsx scripts/kiwoom-accounts.ts",
     "kiwoom:secret:put": "wrangler secret put KIWOOM_CREDENTIALS < .kiwoom-credentials.json",
+    "toss:accounts": "tsx scripts/toss-accounts.ts",
+    "toss:secret:put": "wrangler secret put TOSS_CREDENTIALS < .toss-credentials.json",
     "db:migrate:local": "wrangler d1 migrations apply asset-tracker-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply asset-tracker-db --remote",
     "db:seed:local": "wrangler d1 execute asset-tracker-db --local --file=./seeds/accounts.sql",

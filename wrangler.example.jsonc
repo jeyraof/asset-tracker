@@ -22,7 +22,9 @@
     "KIS_BASE_URL": "https://openapi.koreainvestment.com:9443",
     "KIWOOM_ENV": "prod",
     // Caddy reverse-proxy vhost on your IP-whitelisted VPS (see deploy/caddy/).
-    "KIWOOM_BASE_URL": "https://kiwoom.proxy.example.com"
+    "KIWOOM_BASE_URL": "https://kiwoom.proxy.example.com",
+    // Caddy reverse proxy for Toss (IP-allowlisted host).
+    "TOSS_BASE_URL": "https://toss.proxy.example.com"
   },
   "d1_databases": [
     {

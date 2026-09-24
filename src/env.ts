@@ -43,4 +43,20 @@ export interface Env {
    * (`deal_bas_r`). Wrangler secret.
    */
   KOREAEXIM_API_KEY?: string;
+
+  /**
+   * Toss Securities Open API credentials as `{"clientId":"...","clientSecret":"..."}`.
+   * A single user-level OAuth2 client (accounts are addressed by accountSeq).
+   * Wrangler secret.
+   */
+  TOSS_CREDENTIALS?: string;
+  /**
+   * Base URL the Worker calls. Point this at the Caddy reverse proxy vhost so
+   * requests egress from the IP-allowlisted host. Defaults to the public API.
+   */
+  TOSS_BASE_URL?: string;
+  /** Shared secret sent as `X-Toss-Relay` to the reverse proxy. Wrangler secret. */
+  TOSS_RELAY_SECRET?: string;
+  /** Set to "1" to log outgoing Toss requests (never logs secrets). */
+  DEBUG_TOSS?: string;
 }

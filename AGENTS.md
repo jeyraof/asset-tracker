@@ -25,7 +25,7 @@ Always run `pnpm test` and `pnpm typecheck` after changes.
 - Quotes are fetched **once per instrument**: `src/sync/quoteSources.ts`
   (`resolveQuoteCandidates`) assigns each `market:symbol` one ordered list of
   providers — holders that are available and support the market, ordered by
-  `quoteProviderPriority()` in the registry (`kis` before `kiwoom`). The
+  `quoteProviderPriority()` in the registry (`kis` → `kiwoom` → `toss`). The
   orchestrator batches by the first candidate and retries a failed provider's
   instruments against the next candidate. Never go back to a per-provider
   instrument map: the same symbol held at two brokers would be fetched twice.
@@ -41,6 +41,14 @@ Always run `pnpm test` and `pnpm typecheck` after changes.
   through a forward proxy from the Worker: `cloudflare:sockets` `startTls()`
   after `CONNECT` and `node:tls` both fail on the production edge (workerd
   #6903 — SNI is dropped).
+- Toss (`src/providers/toss/`) differs from KIS/Kiwoom: a **single user-level
+  OAuth2 client** (`TOSS_CREDENTIALS`) serves all accounts, addressed with the
+  `X-Tossinvest-Account: <accountSeq>` header (stored in `meta.accountSeq`). One
+  Toss account holds both KR and US, so it is registered as **two rows** —
+  `<accountSeq>` (KRX) and `<accountSeq>-us` (US, `meta.product="us"`) — matching
+  the per-product cron split. It also requires an IP allowlist, so it egresses
+  via `TOSS_BASE_URL` (a Caddy proxy, `deploy/caddy/toss.caddy`) sending
+  `TOSS_RELAY_SECRET` as `X-Toss-Relay`.
 - DB access goes through `src/db/repo.ts`. Keep SQL there, not in sync/providers.
 - New tables/columns require a new file in `migrations/`; never edit an applied
   migration. The schema carries `provider`/`market`/`country`/`currency` so new
@@ -100,9 +108,10 @@ fixtures, or commit messages/history. See `SECURITY.md` for the full policy.
   Kiwoom account numbers), credentials/tokens/API keys, real hostnames or VPS
   domains, D1/KV ids, or personal data (emails, names, phone numbers).
 - **Secrets** live only as wrangler secrets (`KIS_CREDENTIALS`,
-  `KIWOOM_CREDENTIALS`, `KIWOOM_RELAY_SECRET`, `KOREAEXIM_API_KEY`,
-  `ADMIN_TOKEN`); locally in gitignored files (`.dev.vars`, `*.credentials.json`,
-  token caches). `wrangler.jsonc` and generated `seeds/*.sql` stay gitignored.
+  `KIWOOM_CREDENTIALS`, `KIWOOM_RELAY_SECRET`, `TOSS_CREDENTIALS`,
+  `TOSS_RELAY_SECRET`, `KOREAEXIM_API_KEY`, `ADMIN_TOKEN`); locally in gitignored
+  files (`.dev.vars`, `*.credentials.json`, token caches). `wrangler.jsonc` and
+  generated `seeds/*.sql` stay gitignored.
 - **Test fixtures**: obviously fake values only (`11111111-01`, `KEY-A`,
   `TESTKEY`). Never copy values from prod D1 rows, API responses, or `raw_json`.
 - **Docs/examples**: placeholders only (`<subdomain>`, `example.com`,
@@ -183,3 +192,21 @@ fixtures, or commit messages/history. See `SECURITY.md` for the full policy.
   `dmst_stex_tp` selects the valuation price of a single exchange-agnostic
   position — verified live (2026-09-20) that `KRX` and `NXT` return the same
   holdings/quantities — so keep it `KRX` to value holdings at the KRX close.
+- Toss returns a JSON `{ result }` envelope on success and `{ error: { code,
+  message, requestId } }` on failure (HTTP status is also set); check both.
+  Amounts are JSON numbers; `profitLoss.rate` is a **decimal ratio**
+  (0.1077 = 10.77%) so `mapTossBalance` multiplies by 100.
+- Toss has **no cash field in holdings**: `depositTotal` is approximated from
+  `GET /api/v1/buying-power` (`cashBuyingPower`, one extra call per account).
+  `netAssetAmount`/`nextDaySettlement` stay `null`.
+- Toss fills come from `GET /api/v1/orders?status=CLOSED` (order history, cursor
+  paging, one account per call). Only order types orderable via Open API are
+  returned (장전/장후 시간외 등은 누락), so trade history can be incomplete; it is
+  best-effort like other trades.
+- Toss tokens are **one per client** — issuing a new one revokes the previous
+  (`token-revoked`). Keep the token in KV and re-issue once on a token error;
+  avoid concurrent issuance. Rate limits are per client × group (e.g. `ACCOUNT`
+  1 TPS, `ASSET` 5, `MARKET_DATA_CHART` 20) with `429` + `Retry-After`.
+- Toss KR market data may be **unified (KRX+NXT)**; the candles endpoint is
+  called with `adjusted=false`. Verify it matches the KRX regular-session close
+  policy on the first live run.

@@ -33,3 +33,13 @@ ADMIN_TOKEN="change-me"
 # Korea Eximbank (한국수출입은행) Open API auth key, for the reference FX rate.
 # Issue at https://www.koreaexim.go.kr/ir/HPHKIR020M01?apino=2&viewtype=C
 # KOREAEXIM_API_KEY="your-auth-key"
+
+# Toss Securities Open API credentials (single user-level OAuth2 client).
+# TOSS_CREDENTIALS='{"clientId":"your-client-id","clientSecret":"your-client-secret"}'
+
+# Base URL the Worker calls. Point at the Caddy reverse-proxy vhost so requests
+# egress from the IP-allowlisted host (see deploy/caddy/toss.caddy).
+# TOSS_BASE_URL="https://toss.proxy.example.com"
+
+# Shared secret sent as the X-Toss-Relay header to the reverse proxy.
+# TOSS_RELAY_SECRET="change-me"

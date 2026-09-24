@@ -1,0 +1,34 @@
+# Toss Securities Open API reverse proxy for asset-tracker (Caddy).
+#
+# The Worker calls this vhost over HTTPS; Caddy forwards to
+# https://openapi.tossinvest.com over TLS using THIS host's (IP-allowlisted)
+# source address. Toss requires the calling IP to be registered in
+# WTS > Open API > 허용 IP 관리, and the Worker's egress IPs cannot be, so
+# requests egress from this fixed host instead.
+#
+# Install:
+#   sudo mkdir -p /etc/caddy/conf.d
+#   # /etc/caddy/Caddyfile must contain:  import /etc/caddy/conf.d/*.caddy
+#   sudo cp deploy/caddy/toss.caddy /etc/caddy/conf.d/toss.caddy
+#   sudo systemctl reload caddy
+#
+# DNS: toss.proxy.example.com is an A record to this VPS (DNS-only).
+# Replace <RELAY_SECRET> with the value in the Worker's TOSS_RELAY_SECRET.
+
+toss.proxy.example.com {
+	@relay header X-Toss-Relay "<RELAY_SECRET>"
+
+	handle @relay {
+		reverse_proxy https://openapi.tossinvest.com {
+			header_up Host openapi.tossinvest.com
+			header_up -X-Toss-Relay
+			header_up -X-Forwarded-For
+			header_up -X-Forwarded-Proto
+			header_up -X-Forwarded-Host
+		}
+	}
+
+	handle {
+		respond "forbidden" 403
+	}
+}

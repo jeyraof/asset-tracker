@@ -39,6 +39,23 @@ appkey/appsecret**이 필요하므로, 이를 `KIS_CREDENTIALS` secret(계좌 ex
   한도(50)를 회피.
 - `pnpm test` 64 passed, `pnpm typecheck` 통과.
 
+### 토스증권 추가 (2026-09-25)
+
+- `src/providers/toss/` 추가, `registry`에 등록. **사용자당 단일 OAuth2 client**
+  (`TOSS_CREDENTIALS={clientId,clientSecret}`) + `X-Tossinvest-Account: <accountSeq>`
+  헤더. 한 계좌가 KR+US를 함께 보유하므로 **두 행**으로 등록:
+  `<accountSeq>`(KRX) / `<accountSeq>-us`(US, `meta.product="us"`).
+- 매핑: 보유 `GET /api/v1/holdings`(시장별 필터, `Price{krw,usd}` 합산), 예수금은
+  `GET /api/v1/buying-power`(`cashBuyingPower`)로 **근사**, 체결은
+  `GET /api/v1/orders?status=CLOSED`(커서 페이징, `execution` 사용), 일봉은
+  `GET /api/v1/candles?interval=1d&adjusted=false`.
+- IP 허용 필요 → 키움과 동일하게 Caddy 리버스 프록시
+  (`deploy/caddy/toss.caddy`, `TOSS_BASE_URL`, `X-Toss-Relay`/`TOSS_RELAY_SECRET`).
+- 주의: Open API로 접수 가능한 호가유형만 `orders`에 노출(시간외 등 누락), 토큰은
+  클라이언트당 1개(`token-revoked`), KR 시세는 통합(KRX+NXT)일 수 있음.
+- 계좌 등록: `pnpm toss:accounts -- --sql > seeds/accounts.sql`.
+- `pnpm test` 130 passed, `pnpm typecheck` 통과.
+
 ### 시세 중복 제거 + KRX 정규장 정렬 (2026-09-20)
 
 - **종목별 단일 시세 출처**: 여러 증권사가 같은 종목을 보유해도 시세는 한 번만
@@ -168,6 +185,11 @@ src/
     client.ts               api-id header, return_code checks, pagination
     tr-ids.ts               API ids, paths, base URLs
     endpoints/domestic.ts   Raw Kiwoom fields -> normalized domain types
+  providers/toss/           Toss Securities implementation (OAuth2 + accountSeq)
+    credentials.ts          TOSS_CREDENTIALS (single client) parsing
+    auth.ts                 OAuth2 token issue + per-client KV cache
+    client.ts               Bearer + X-Tossinvest-Account, error envelope, retry
+    endpoints/              holdings / orders / candles -> normalized types
   db/repo.ts               D1 upserts / queries
   fx/                       Market FX sources (not brokers)
     koreaexim.ts            Korea Eximbank 매매기준율 (FxSource)
@@ -374,6 +396,8 @@ Restrict by product with `products` (comma-separated), e.g. `?products=us` for U
 | `pnpm kis:secret:put` | upload `.kis-credentials.json` as `KIS_CREDENTIALS` |
 | `pnpm kiwoom:accounts -- ...` | discover/verify Kiwoom accounts / emit seed SQL |
 | `pnpm kiwoom:secret:put` | upload `.kiwoom-credentials.json` as `KIWOOM_CREDENTIALS` |
+| `pnpm toss:accounts -- ...` | discover/verify Toss accounts / emit seed SQL |
+| `pnpm toss:secret:put` | upload `.toss-credentials.json` as `TOSS_CREDENTIALS` |
 | `pnpm db:seed:local` / `:remote` | seed accounts |
 
 ## KIS notes
@@ -420,6 +444,10 @@ Worker --HTTPS--> Caddy (whitelisted IP) --HTTPS--> api.kiwoom.com
 - `KIWOOM_BASE_URL` points at the Caddy vhost
   (`https://kiwoom.proxy.example.com`); `KIWOOM_RELAY_SECRET` is sent as the
   `X-Kiwoom-Relay` header and checked by Caddy. Neither is needed for KIS.
+- Toss uses the same pattern: `TOSS_BASE_URL`
+  (`https://toss.proxy.example.com`) with `TOSS_RELAY_SECRET` as the
+  `X-Toss-Relay` header (`deploy/caddy/toss.caddy`). Toss also requires the VPS
+  IP in its WTS > Open API > 허용 IP 관리 allowlist.
 - The VPS `/etc/caddy/Caddyfile` should `import /etc/caddy/conf.d/*.caddy`, and
   each broker gets its own file there (copy from `deploy/caddy/`). Caddy obtains
   and renews the public certificate automatically (DNS-only A record).

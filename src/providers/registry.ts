@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import type { BrokerProvider } from "../domain/types";
 import { createKisProvider } from "./kis";
 import { createKiwoomProvider } from "./kiwoom";
+import { createTossProvider } from "./toss";
 
 export interface ProviderContext {
   env: Env;
@@ -12,6 +13,7 @@ export type ProviderFactory = (ctx: ProviderContext) => BrokerProvider;
 const factories: Record<string, ProviderFactory> = {
   kis: (ctx) => createKisProvider(ctx.env),
   kiwoom: (ctx) => createKiwoomProvider(ctx.env),
+  toss: (ctx) => createTossProvider(ctx.env),
 };
 
 /**

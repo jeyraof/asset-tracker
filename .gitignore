@@ -19,3 +19,5 @@ seeds/*.sql
 .kiwoom-credentials.json
 .kis-token-cache.json
 .kiwoom-token-cache.json
+.toss-credentials.json
+.toss-token-cache.json
