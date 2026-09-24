@@ -1,5 +1,6 @@
 import type { Env } from "../../env";
 import { addDays, kstDate, toCompactDate } from "../../lib/dates";
+import { describeError } from "../../lib/errors";
 import { logger } from "../../lib/logger";
 import { RateLimiter } from "../../lib/rateLimit";
 import { str } from "../../lib/parse";
@@ -9,6 +10,8 @@ import type {
   BrokerProvider,
   DailyQuote,
   InstrumentRef,
+  QuoteFailure,
+  QuoteFetchResult,
   TradeFill,
 } from "../../domain/types";
 import { KisClient } from "./client";
@@ -220,11 +223,12 @@ export class KisProvider implements BrokerProvider {
     return mapDomesticTrades({ output1: rows });
   }
 
-  async getDailyQuotes(instruments: InstrumentRef[], date: string): Promise<DailyQuote[]> {
+  async getDailyQuotes(instruments: InstrumentRef[], date: string): Promise<QuoteFetchResult> {
     const client = this.quoteClient();
     const trId = getTrIds(this.deps.environment).domesticDailyChart;
     const from = addDays(date, -(QUOTE_LOOKBACK_DAYS - 1));
     const quotes: DailyQuote[] = [];
+    const failures: QuoteFailure[] = [];
 
     for (const instrument of instruments) {
       if (!this.supportsMarket(instrument.market)) continue;
@@ -244,14 +248,19 @@ export class KisProvider implements BrokerProvider {
         );
         quotes.push(...mapDomesticDailyQuotes(body, instrument.symbol));
       } catch (error) {
+        const details = describeError(error);
+        failures.push({ ref: instrument, ...details });
         logger.warn("failed to fetch daily quote", {
           symbol: instrument.symbol,
-          error: error instanceof Error ? error.message : String(error),
+          market: instrument.market,
+          error: details.message,
+          status: details.status,
+          attempts: details.attempts,
         });
       }
     }
 
-    return quotes;
+    return { quotes, failures };
   }
 }
 

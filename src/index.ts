@@ -3,7 +3,7 @@ import { etDate, isValidDateString, kstDate } from "./lib/dates";
 import { logger } from "./lib/logger";
 import { runSync } from "./sync/orchestrator";
 import { syncFxRates } from "./sync/fx";
-import { listActiveAccounts, listRecentRuns } from "./db/repo";
+import { getLatestSyncRun, getSyncRun, listActiveAccounts, listRecentRuns, listSyncErrors } from "./db/repo";
 import { listKnownProviders } from "./providers/registry";
 
 const DEFAULT_LOOKBACK_DAYS = 7;
@@ -43,6 +43,22 @@ function pickProducts(value: unknown): string[] | undefined {
     .map((product) => product.trim())
     .filter(Boolean);
   return products.length > 0 ? products : undefined;
+}
+
+interface RunDetails {
+  errors?: unknown[];
+  failedSymbols?: string[];
+}
+
+function parseRunDetails(json: string | null): RunDetails | null {
+  if (!json) return null;
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (parsed && typeof parsed === "object") return parsed as RunDetails;
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 async function readJsonBody(request: Request): Promise<Record<string, unknown>> {
@@ -129,7 +145,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
+    if (request.method === "GET" && url.pathname === "/") {
       return json({
         service: "asset-tracker",
         ok: true,
@@ -137,6 +153,34 @@ export default {
         todayKst: kstDate(),
         providers: listKnownProviders(),
       });
+    }
+
+    // Health reflects the last sync run: non-2xx when it was not successful, so
+    // an external uptime monitor can alert without a bespoke webhook.
+    if (request.method === "GET" && url.pathname === "/health") {
+      const last = await getLatestSyncRun(env.DB).catch(() => null);
+      const details = parseRunDetails(last?.details_json ?? null);
+      const ok = !last || last.status === "success";
+      return json(
+        {
+          service: "asset-tracker",
+          ok,
+          time: new Date().toISOString(),
+          todayKst: kstDate(),
+          providers: listKnownProviders(),
+          sync: last
+            ? {
+                runId: last.run_id,
+                status: last.status,
+                startedAt: last.started_at,
+                finishedAt: last.finished_at,
+                errorCount: details?.errors?.length ?? 0,
+                failedSymbols: details?.failedSymbols ?? [],
+              }
+            : null,
+        },
+        ok ? 200 : 503,
+      );
     }
 
     if (request.method === "POST" && url.pathname === "/sync") {
@@ -157,6 +201,16 @@ export default {
       if (!isAuthorized(request, env)) return json({ error: "unauthorized" }, 401);
       const runs = await listRecentRuns(env.DB, 20);
       return json({ runs });
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/runs/")) {
+      if (!isAuthorized(request, env)) return json({ error: "unauthorized" }, 401);
+      const runId = decodeURIComponent(url.pathname.slice("/runs/".length));
+      if (!runId) return json({ error: "not found" }, 404);
+      const run = await getSyncRun(env.DB, runId);
+      if (!run) return json({ error: "not found" }, 404);
+      const errors = await listSyncErrors(env.DB, runId);
+      return json({ run, errors });
     }
 
     return json({ error: "not found" }, 404);

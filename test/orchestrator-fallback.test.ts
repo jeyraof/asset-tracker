@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { syncQuotesWithFallback, type SyncReport } from "../src/sync/orchestrator";
-import type { BrokerProvider, DailyQuote } from "../src/domain/types";
+import type { BrokerProvider, DailyQuote, QuoteFetchResult, QuoteFailure } from "../src/domain/types";
 import type { QuoteAssignment } from "../src/sync/quoteSources";
 
 const db = {
@@ -10,7 +10,11 @@ const db = {
   },
 } as unknown as D1Database;
 
-function provider(id: string, quotes: () => Promise<DailyQuote[]>, calls: string[]): BrokerProvider {
+function provider(
+  id: string,
+  fetch: () => Promise<Partial<QuoteFetchResult>>,
+  calls: string[],
+): BrokerProvider {
   return {
     id,
     defaultMarket: "KRX",
@@ -21,11 +25,22 @@ function provider(id: string, quotes: () => Promise<DailyQuote[]>, calls: string
       throw new Error("unused");
     },
     getTrades: async () => [],
-    getDailyQuotes: async () => {
+    getDailyQuotes: async (): Promise<QuoteFetchResult> => {
       calls.push(id);
-      return quotes();
+      const result = await fetch();
+      return { quotes: result.quotes ?? [], failures: result.failures ?? [] };
     },
   };
+}
+
+function throws(id: string, calls: string[]): BrokerProvider {
+  return provider(
+    id,
+    async () => {
+      throw new Error(`${id} down`);
+    },
+    calls,
+  );
 }
 
 function report(): SyncReport {
@@ -37,6 +52,8 @@ function report(): SyncReport {
     accounts: [],
     quotes: [],
     errors: [],
+    retries: 0,
+    failedSymbols: [],
     durationMs: 0,
   };
 }
@@ -46,17 +63,19 @@ const assignments: QuoteAssignment[] = [
   { ref: { market: "KRX", symbol: "000660" }, candidates: ["kis", "kiwoom"] },
 ];
 
+const failure = (symbol: string): QuoteFailure => ({
+  ref: { market: "KRX", symbol },
+  message: "KIS HTTP 502",
+  status: 502,
+  attempts: 3,
+});
+
 describe("syncQuotesWithFallback", () => {
   it("falls back to the next provider when the first fails", async () => {
     const calls: string[] = [];
     const available = new Map<string, BrokerProvider>([
-      [
-        "kis",
-        provider("kis", async () => {
-          throw new Error("kis down");
-        }, calls),
-      ],
-      ["kiwoom", provider("kiwoom", async () => [], calls)],
+      ["kis", throws("kis", calls)],
+      ["kiwoom", provider("kiwoom", async () => ({ quotes: [] }), calls)],
     ]);
     const result = report();
 
@@ -69,17 +88,9 @@ describe("syncQuotesWithFallback", () => {
 
   it("records an error per instrument only after all candidates fail", async () => {
     const calls: string[] = [];
-    const failing = (id: string) =>
-      provider(
-        id,
-        async () => {
-          throw new Error(`${id} down`);
-        },
-        calls,
-      );
     const available = new Map<string, BrokerProvider>([
-      ["kis", failing("kis")],
-      ["kiwoom", failing("kiwoom")],
+      ["kis", throws("kis", calls)],
+      ["kiwoom", throws("kiwoom", calls)],
     ]);
     const result = report();
 
@@ -87,14 +98,17 @@ describe("syncQuotesWithFallback", () => {
 
     expect(calls).toEqual(["kis", "kiwoom"]);
     expect(result.quotes).toEqual([]);
-    expect(result.errors.map((e) => e.scope)).toEqual(["quotes:kiwoom", "quotes:kiwoom"]);
+    expect(result.errors.map((e) => e.scope)).toEqual([
+      "quotes:kiwoom:005930",
+      "quotes:kiwoom:000660",
+    ]);
   });
 
   it("fetches each instrument once when the first provider succeeds", async () => {
     const calls: string[] = [];
     const available = new Map<string, BrokerProvider>([
-      ["kis", provider("kis", async () => [], calls)],
-      ["kiwoom", provider("kiwoom", async () => [], calls)],
+      ["kis", provider("kis", async () => ({ quotes: [] }), calls)],
+      ["kiwoom", provider("kiwoom", async () => ({ quotes: [] }), calls)],
     ]);
     const result = report();
 
@@ -102,5 +116,60 @@ describe("syncQuotesWithFallback", () => {
 
     expect(calls).toEqual(["kis"]);
     expect(result.quotes).toEqual([{ provider: "kis", instruments: 2, quotes: 0 }]);
+  });
+
+  it("requeues only the failed instrument to the next candidate", async () => {
+    const calls: string[] = [];
+    const available = new Map<string, BrokerProvider>([
+      [
+        "kis",
+        provider(
+          "kis",
+          async () => ({ quotes: [], failures: [failure("005930")] }),
+          calls,
+        ),
+      ],
+      ["kiwoom", provider("kiwoom", async () => ({ quotes: [] }), calls)],
+    ]);
+    const result = report();
+
+    await syncQuotesWithFallback(db, assignments, available, result, "run-1", "2026-09-20");
+
+    expect(calls).toEqual(["kis", "kiwoom"]);
+    expect(result.quotes).toEqual([
+      { provider: "kis", instruments: 2, quotes: 0 },
+      { provider: "kiwoom", instruments: 1, quotes: 0 },
+    ]);
+    expect(result.errors).toEqual([]);
+  });
+
+  it("records a symbol error when the fallback also fails", async () => {
+    const calls: string[] = [];
+    const available = new Map<string, BrokerProvider>([
+      [
+        "kis",
+        provider("kis", async () => ({ quotes: [], failures: [failure("005930")] }), calls),
+      ],
+      [
+        "kiwoom",
+        provider("kiwoom", async () => ({ quotes: [], failures: [failure("005930")] }), calls),
+      ],
+    ]);
+    const result = report();
+
+    await syncQuotesWithFallback(db, assignments, available, result, "run-1", "2026-09-20");
+
+    expect(calls).toEqual(["kis", "kiwoom"]);
+    expect(result.errors).toEqual([
+      {
+        scope: "quotes:kiwoom:005930",
+        provider: "kiwoom",
+        market: "KRX",
+        symbol: "005930",
+        message: "KIS HTTP 502",
+        status: 502,
+        attempts: 3,
+      },
+    ]);
   });
 });

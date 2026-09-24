@@ -102,6 +102,26 @@ export interface DailyQuote {
   raw: unknown;
 }
 
+/** A single instrument whose quote fetch failed, with transport details. */
+export interface QuoteFailure {
+  ref: InstrumentRef;
+  message: string;
+  status?: number;
+  code?: string;
+  attempts?: number;
+  path?: string;
+}
+
+/**
+ * Result of a quote batch: successful quotes plus per-instrument failures.
+ * Providers never throw for a single instrument — callers (and the fallback
+ * orchestrator) need the partial result and the list of instruments to retry.
+ */
+export interface QuoteFetchResult {
+  quotes: DailyQuote[];
+  failures: QuoteFailure[];
+}
+
 export interface FxRate {
   /** Base currency, e.g. "USD". */
   base: Currency;
@@ -135,7 +155,7 @@ export interface BrokerProvider {
   getTrades(account: AccountConfig, from: string, to: string): Promise<TradeFill[]>;
 
   /** Daily OHLC quotes as of `date` for the given instruments. */
-  getDailyQuotes(instruments: InstrumentRef[], date: string): Promise<DailyQuote[]>;
+  getDailyQuotes(instruments: InstrumentRef[], date: string): Promise<QuoteFetchResult>;
 
   /**
    * Optional spot FX rate for a currency pair as of `date`. Providers that have

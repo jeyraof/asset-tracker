@@ -1,10 +1,16 @@
 import type { Env } from "../env";
-import type { AccountConfig, BrokerProvider, InstrumentRef } from "../domain/types";
+import type {
+  AccountConfig,
+  BrokerProvider,
+  InstrumentRef,
+  QuoteFetchResult,
+} from "../domain/types";
 import { getProvider, quoteProviderPriority } from "../providers/registry";
 import * as repo from "../db/repo";
 import { kstDate } from "../lib/dates";
-import { errorCode, errorText } from "../lib/errors";
+import { describeError, errorText } from "../lib/errors";
 import { logger } from "../lib/logger";
+import { takeRetries } from "../lib/retryPolicy";
 import { syncBalance } from "./balances";
 import { syncTrades } from "./trades";
 import { syncQuotes } from "./quotes";
@@ -41,6 +47,13 @@ export interface SyncError {
   scope: string;
   message: string;
   code?: string;
+  provider?: string;
+  externalId?: string;
+  market?: string;
+  symbol?: string;
+  status?: number;
+  attempts?: number;
+  path?: string;
 }
 
 export interface SyncReport {
@@ -51,6 +64,10 @@ export interface SyncReport {
   accounts: AccountSyncResult[];
   quotes: ProviderQuoteResult[];
   errors: SyncError[];
+  /** Retry attempts observed during the run (approximate under concurrency). */
+  retries: number;
+  /** Symbols whose quotes could not be fetched from any candidate provider. */
+  failedSymbols: string[];
   durationMs: number;
 }
 
@@ -85,6 +102,8 @@ export async function runSync(env: Env, options: SyncOptions = {}): Promise<Sync
   const source = options.source ?? "cron";
   const runId = crypto.randomUUID();
 
+  takeRetries();
+
   await repo.startSyncRun(env.DB, { runId, provider: options.provider ?? null, source });
 
   const report: SyncReport = {
@@ -95,6 +114,8 @@ export async function runSync(env: Env, options: SyncOptions = {}): Promise<Sync
     accounts: [],
     quotes: [],
     errors: [],
+    retries: 0,
+    failedSymbols: [],
     durationMs: 0,
   };
 
@@ -102,10 +123,11 @@ export async function runSync(env: Env, options: SyncOptions = {}): Promise<Sync
   try {
     accounts = await repo.listActiveAccounts(env.DB, options.provider);
   } catch (error) {
-    report.errors.push({ scope: "accounts", message: errorText(error), code: errorCode(error) });
+    report.errors.push({ scope: "accounts", ...describeError(error) });
     report.status = "failed";
     report.durationMs = Date.now() - startedAt;
-    await repo.finishSyncRun(env.DB, runId, report.status, report);
+    report.retries = takeRetries();
+    await persistReport(env, runId, report);
     logger.error("failed to load accounts", { runId, error: errorText(error) });
     return report;
   }
@@ -123,10 +145,10 @@ export async function runSync(env: Env, options: SyncOptions = {}): Promise<Sync
       providerCache.set(id, provider);
       return provider;
     } catch (error) {
-      const message = errorText(error);
+      const details = describeError(error);
       providerCache.set(id, null);
-      report.errors.push({ scope: `provider:${id}`, message, code: errorCode(error) });
-      logger.error("provider unavailable", { runId, provider: id, message, code: errorCode(error) });
+      report.errors.push({ scope: `provider:${id}`, provider: id, ...details });
+      logger.error("provider unavailable", { runId, provider: id, message: details.message, code: details.code });
       return null;
     }
   }
@@ -162,9 +184,14 @@ export async function runSync(env: Env, options: SyncOptions = {}): Promise<Sync
         try {
           trades = (await syncTrades(env.DB, provider, account, date, lookbackDays)).length;
         } catch (error) {
-          const message = errorText(error);
-          report.errors.push({ scope: `${scope}:trades`, message, code: errorCode(error) });
-          logger.error("trade sync failed", { runId, scope, message, code: errorCode(error) });
+          const details = describeError(error);
+          report.errors.push({
+            scope: `${scope}:trades`,
+            provider: account.provider,
+            externalId: account.externalId,
+            ...details,
+          });
+          logger.error("trade sync failed", { runId, scope, message: details.message, code: details.code, status: details.status, attempts: details.attempts });
         }
       }
 
@@ -177,9 +204,14 @@ export async function runSync(env: Env, options: SyncOptions = {}): Promise<Sync
       });
       logger.info("account synced", { runId, scope, holdings: balance.holdings.length, trades });
     } catch (error) {
-      const message = errorText(error);
-      report.errors.push({ scope, message, code: errorCode(error) });
-      logger.error("account sync failed", { runId, scope, message, code: errorCode(error) });
+      const details = describeError(error);
+      report.errors.push({
+        scope,
+        provider: account.provider,
+        externalId: account.externalId,
+        ...details,
+      });
+      logger.error("account sync failed", { runId, scope, message: details.message, code: details.code, status: details.status, attempts: details.attempts });
     }
   }
 
@@ -201,25 +233,53 @@ export async function runSync(env: Env, options: SyncOptions = {}): Promise<Sync
       : report.accounts.length + report.quotes.length > 0
         ? "partial"
         : "failed";
+  report.retries = takeRetries();
+  report.failedSymbols = [
+    ...new Set(report.errors.map((error) => error.symbol).filter((s): s is string => Boolean(s))),
+  ];
   report.durationMs = Date.now() - startedAt;
 
-  await repo.finishSyncRun(env.DB, runId, report.status, report);
+  await persistReport(env, runId, report);
   logger.info("sync finished", {
     runId,
     date,
     status: report.status,
     accounts: report.accounts.length,
     errors: report.errors.length,
+    retries: report.retries,
     durationMs: report.durationMs,
   });
 
   return report;
 }
 
+/** Persists the run status, details, and structured error rows in one batch. */
+async function persistReport(env: Env, runId: string, report: SyncReport): Promise<void> {
+  await repo.finishSyncRun(
+    env.DB,
+    runId,
+    report.status,
+    report,
+    report.errors.map((error) => ({
+      runId,
+      scope: error.scope,
+      message: error.message,
+      provider: error.provider ?? null,
+      externalId: error.externalId ?? null,
+      market: error.market ?? null,
+      symbol: error.symbol ?? null,
+      status: error.status ?? null,
+      code: error.code ?? null,
+      attempts: error.attempts ?? null,
+      path: error.path ?? null,
+    })),
+  );
+}
+
 /**
  * Fetches quotes once per instrument, batching by chosen provider, and retries
- * the instruments of a failed provider against its next candidate so a broker
- * outage never drops an instrument another broker could price.
+ * a failed instrument against its next candidate so a broker outage never drops
+ * an instrument another broker could price.
  */
 export async function syncQuotesWithFallback(
   db: D1Database,
@@ -247,6 +307,51 @@ export async function syncQuotesWithFallback(
   const synced = new Map<string, { instruments: number; quotes: number }>();
   const maxAttempts = Math.max(1, ...assignments.map((a) => a.candidates.length));
 
+  /** Requeues a failed instrument to its next candidate, else records an error. */
+  function requeueOrRecord(
+    ref: InstrumentRef,
+    providerId: string,
+    failure: {
+      message: string;
+      status?: number;
+      code?: string;
+      attempts?: number;
+      path?: string;
+    },
+    next: Map<string, InstrumentRef[]>,
+  ): void {
+    const key = `${ref.market}:${ref.symbol}`;
+    const assignment = assignmentByKey.get(key);
+    const nextIndex = (remaining.get(key) ?? 0) + 1;
+    const fallback = assignment?.candidates[nextIndex];
+
+    if (assignment && fallback) {
+      remaining.set(key, nextIndex);
+      const fallbackRefs = next.get(fallback) ?? [];
+      fallbackRefs.push(ref);
+      next.set(fallback, fallbackRefs);
+      return;
+    }
+
+    report.errors.push({
+      scope: `quotes:${providerId}:${ref.symbol}`,
+      provider: providerId,
+      market: ref.market,
+      symbol: ref.symbol,
+      ...failure,
+    });
+    logger.error("quote sync failed", {
+      runId,
+      provider: providerId,
+      symbol: ref.symbol,
+      market: ref.market,
+      message: failure.message,
+      status: failure.status,
+      code: failure.code,
+      attempts: failure.attempts,
+    });
+  }
+
   for (let attempt = 0; attempt < maxAttempts && pending.size > 0; attempt++) {
     const next = new Map<string, InstrumentRef[]>();
 
@@ -254,49 +359,49 @@ export async function syncQuotesWithFallback(
       const provider = available.get(providerId);
       if (!provider) continue;
 
+      let result: QuoteFetchResult | undefined;
+      let thrown: unknown;
       try {
-        const quotes = await syncQuotes(db, provider, refs, date);
-        const aggregate = synced.get(providerId) ?? { instruments: 0, quotes: 0 };
-        aggregate.instruments += refs.length;
-        aggregate.quotes += quotes.length;
-        synced.set(providerId, aggregate);
-        logger.info("quotes synced", {
-          runId,
-          provider: providerId,
-          instruments: refs.length,
-          quotes: quotes.length,
-        });
+        result = await syncQuotes(db, provider, refs, date);
       } catch (error) {
-        const message = errorText(error);
+        thrown = error;
+      }
+
+      if (!result) {
+        // A whole-batch failure (e.g. upsert error): requeue every instrument.
+        const details = describeError(thrown);
         let requeued = 0;
-
         for (const ref of refs) {
-          const key = `${ref.market}:${ref.symbol}`;
-          const assignment = assignmentByKey.get(key);
-          const nextIndex = (remaining.get(key) ?? 0) + 1;
-          const fallback = assignment?.candidates[nextIndex];
-
-          if (assignment && fallback) {
-            remaining.set(key, nextIndex);
-            const fallbackRefs = next.get(fallback) ?? [];
-            fallbackRefs.push(ref);
-            next.set(fallback, fallbackRefs);
-            requeued += 1;
-          } else {
-            report.errors.push({ scope: `quotes:${providerId}`, message, code: errorCode(error) });
-            logger.error("quote sync failed", {
-              runId,
-              provider: providerId,
-              symbol: ref.symbol,
-              message,
-              code: errorCode(error),
-            });
-          }
+          const before = report.errors.length;
+          requeueOrRecord(ref, providerId, details, next);
+          if (report.errors.length === before) requeued += 1;
         }
-
         if (requeued > 0) {
-          logger.warn("quote fallback", { runId, provider: providerId, requeued, message });
+          logger.warn("quote fallback", { runId, provider: providerId, requeued, message: details.message });
         }
+        continue;
+      }
+
+      const aggregate = synced.get(providerId) ?? { instruments: 0, quotes: 0 };
+      aggregate.instruments += refs.length;
+      aggregate.quotes += result.quotes.length;
+      synced.set(providerId, aggregate);
+      logger.info("quotes synced", {
+        runId,
+        provider: providerId,
+        instruments: refs.length,
+        quotes: result.quotes.length,
+        failed: result.failures.length,
+      });
+
+      let requeued = 0;
+      for (const { ref, ...details } of result.failures) {
+        const before = report.errors.length;
+        requeueOrRecord(ref, providerId, details, next);
+        if (report.errors.length === before) requeued += 1;
+      }
+      if (requeued > 0) {
+        logger.warn("quote fallback", { runId, provider: providerId, requeued });
       }
     }
 

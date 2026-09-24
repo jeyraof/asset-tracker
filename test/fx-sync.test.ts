@@ -41,7 +41,7 @@ function baseProvider(id: string): BrokerProvider {
       throw new Error("unused");
     },
     getTrades: async () => [],
-    getDailyQuotes: async () => [],
+    getDailyQuotes: async () => ({ quotes: [], failures: [] }),
   };
 }
 

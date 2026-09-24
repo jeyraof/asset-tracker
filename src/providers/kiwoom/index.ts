@@ -1,5 +1,6 @@
 import type { Env } from "../../env";
 import { addDays, toCompactDate } from "../../lib/dates";
+import { describeError } from "../../lib/errors";
 import { logger } from "../../lib/logger";
 import { str } from "../../lib/parse";
 import { RateLimiter } from "../../lib/rateLimit";
@@ -10,6 +11,8 @@ import type {
   DailyQuote,
   FxRate,
   InstrumentRef,
+  QuoteFailure,
+  QuoteFetchResult,
   TradeFill,
 } from "../../domain/types";
 import { KiwoomClient } from "./client";
@@ -187,6 +190,9 @@ export class KiwoomProvider implements BrokerProvider {
     }
     balance = { ...balance, acnt_evlt_remn_indv_tot: holdings };
 
+    // kt00018 (balance) carries no 예수금/정산 fields (verified live), so the
+    // deposit summary needs this separate kt00004 call — one extra subrequest
+    // per account that cannot be folded into the balance response.
     const deposit = (
       await client.request<KiwoomDepositResponse>(
         KIWOOM_API_IDS.deposit,
@@ -352,10 +358,11 @@ export class KiwoomProvider implements BrokerProvider {
     return fills;
   }
 
-  async getDailyQuotes(instruments: InstrumentRef[], date: string): Promise<DailyQuote[]> {
+  async getDailyQuotes(instruments: InstrumentRef[], date: string): Promise<QuoteFetchResult> {
     const client = this.quoteClient();
     const from = addDays(date, -(QUOTE_LOOKBACK_DAYS - 1));
     const quotes: DailyQuote[] = [];
+    const failures: QuoteFailure[] = [];
 
     for (const instrument of instruments) {
       if (!this.supportsMarket(instrument.market)) continue;
@@ -394,15 +401,19 @@ export class KiwoomProvider implements BrokerProvider {
           );
         }
       } catch (error) {
+        const details = describeError(error);
+        failures.push({ ref: instrument, ...details });
         logger.warn("failed to fetch kiwoom daily quote", {
           symbol: instrument.symbol,
           market: instrument.market,
-          error: error instanceof Error ? error.message : String(error),
+          error: details.message,
+          status: details.status,
+          attempts: details.attempts,
         });
       }
     }
 
-    return quotes;
+    return { quotes, failures };
   }
 
   /**

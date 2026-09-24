@@ -1,9 +1,21 @@
 import { RateLimiter, withRetry } from "../../lib/rateLimit";
 import { logger } from "../../lib/logger";
+import { markAttempts } from "../../lib/errors";
+import {
+  isTransientHttp,
+  parseRetryAfter,
+  recordRetry,
+  requestSignal,
+  retryAfterMsOf,
+} from "../../lib/retryPolicy";
 import { getKiwoomAccessToken, invalidateKiwoomToken } from "./auth";
 import { isKiwoomApiError, KiwoomApiError, normalizeKiwoomReturnCode } from "./errors";
 import type { KiwoomEnvironment } from "./tr-ids";
 import type { KiwoomEnvelope } from "./types";
+
+/** Retry logical rate limits (1700) and transport-level 429/5xx/network errors. */
+const SHOULD_RETRY = (error: unknown): boolean =>
+  (isKiwoomApiError(error) && error.isRateLimit()) || isTransientHttp(error);
 
 export interface KiwoomCallResult<T> {
   body: T;
@@ -73,15 +85,24 @@ export class KiwoomClient {
     init: KiwoomRequestInit,
     allowTokenRetry: boolean,
   ): Promise<KiwoomCallResult<T>> {
+    let attempts = 0;
     return withRetry(
       () => this.perform<T>(apiId, path, body, init, allowTokenRetry),
       {
         retries: 3,
         baseDelayMs: 600,
         maxDelayMs: 4_000,
-        shouldRetry: (error) => isKiwoomApiError(error) && error.isRateLimit(),
+        shouldRetry: SHOULD_RETRY,
+        onRetry: () => {
+          attempts += 1;
+          recordRetry();
+        },
+        delayFor: (error, _attempt, fallbackMs) => retryAfterMsOf(error) ?? fallbackMs,
       },
-    );
+    ).catch((error: unknown) => {
+      markAttempts(error, attempts + 1);
+      throw error;
+    });
   }
 
   private async perform<T extends KiwoomEnvelope>(
@@ -123,6 +144,7 @@ export class KiwoomClient {
       method: "POST",
       headers,
       body: JSON.stringify(body),
+      signal: requestSignal(),
     });
 
     const text = await response.text();
@@ -135,6 +157,7 @@ export class KiwoomClient {
         apiId,
         status: response.status,
         body: text,
+        retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
       });
     }
 
@@ -146,6 +169,7 @@ export class KiwoomClient {
         apiId,
         status: response.status,
         body: parsed,
+        retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
       });
 
       if (allowTokenRetry && error.isTokenError()) {

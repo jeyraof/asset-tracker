@@ -18,6 +18,7 @@ export interface KiwoomApiErrorOptions {
   apiId?: string;
   status?: number;
   body?: unknown;
+  retryAfterMs?: number;
 }
 
 export class KiwoomApiError extends Error {
@@ -26,6 +27,7 @@ export class KiwoomApiError extends Error {
   readonly apiId?: string;
   readonly status?: number;
   readonly body?: unknown;
+  readonly retryAfterMs?: number;
 
   constructor(message: string, options: KiwoomApiErrorOptions = {}) {
     super(message);
@@ -35,6 +37,7 @@ export class KiwoomApiError extends Error {
     this.apiId = options.apiId;
     this.status = options.status;
     this.body = options.body;
+    this.retryAfterMs = options.retryAfterMs;
   }
 
   isTokenError(): boolean {

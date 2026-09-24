@@ -25,6 +25,10 @@ export interface RetryOptions {
   baseDelayMs: number;
   maxDelayMs: number;
   shouldRetry: (error: unknown) => boolean;
+  /** Called before each retry with the 1-based attempt number about to start. */
+  onRetry?: (attempt: number, error: unknown) => void;
+  /** Overrides the backoff delay (e.g. to honor a `Retry-After` hint). */
+  delayFor?: (error: unknown, attempt: number, fallbackMs: number) => number;
 }
 
 /** Retries `fn` with exponential backoff + jitter. */
@@ -35,9 +39,11 @@ export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions):
       return await fn();
     } catch (error) {
       if (attempt >= options.retries || !options.shouldRetry(error)) throw error;
-      const delay = Math.min(options.maxDelayMs, options.baseDelayMs * 2 ** attempt);
+      const base = Math.min(options.maxDelayMs, options.baseDelayMs * 2 ** attempt);
+      const delay = Math.max(0, options.delayFor?.(error, attempt + 1, base) ?? base);
       await sleep(delay + Math.random() * options.baseDelayMs);
       attempt += 1;
+      options.onRetry?.(attempt, error);
     }
   }
 }

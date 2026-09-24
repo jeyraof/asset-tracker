@@ -17,6 +17,7 @@ export interface KisApiErrorOptions {
   trId?: string;
   status?: number;
   body?: unknown;
+  retryAfterMs?: number;
 }
 
 export class KisApiError extends Error {
@@ -26,6 +27,7 @@ export class KisApiError extends Error {
   readonly trId?: string;
   readonly status?: number;
   readonly body?: unknown;
+  readonly retryAfterMs?: number;
 
   constructor(message: string, options: KisApiErrorOptions = {}) {
     super(message);
@@ -36,6 +38,7 @@ export class KisApiError extends Error {
     this.trId = options.trId;
     this.status = options.status;
     this.body = options.body;
+    this.retryAfterMs = options.retryAfterMs;
   }
 
   isTokenError(): boolean {

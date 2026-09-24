@@ -296,7 +296,7 @@ describe("KiwoomProvider", () => {
   it("maps quotes and drops candles outside the lookback window", async () => {
     const { provider } = createProvider();
 
-    const quotes = await provider.getDailyQuotes([{ market: "KRX", symbol: "005930" }], "2026-09-20");
+    const quotes = (await provider.getDailyQuotes([{ market: "KRX", symbol: "005930" }], "2026-09-20")).quotes;
 
     expect(quotes).toHaveLength(1);
     expect(quotes[0]).toMatchObject({ symbol: "005930", date: "2026-09-19", close: 70100 });
@@ -335,7 +335,7 @@ describe("KiwoomProvider", () => {
   it("routes KRX-GOLD quotes to ka50081", async () => {
     const { provider, mock } = createProvider();
 
-    const quotes = await provider.getDailyQuotes([{ market: "KRX-GOLD", symbol: "M04020000" }], "2026-09-20");
+    const quotes = (await provider.getDailyQuotes([{ market: "KRX-GOLD", symbol: "M04020000" }], "2026-09-20")).quotes;
 
     expect(quotes).toHaveLength(1);
     expect(quotes[0]).toMatchObject({
@@ -409,7 +409,7 @@ describe("KiwoomProvider", () => {
   it("routes US quotes to usa06012 after an exchange lookup", async () => {
     const { provider, mock } = createProvider();
 
-    const quotes = await provider.getDailyQuotes([{ market: "US", symbol: "AAPL" }], "2026-09-20");
+    const quotes = (await provider.getDailyQuotes([{ market: "US", symbol: "AAPL" }], "2026-09-20")).quotes;
 
     expect(quotes).toHaveLength(1);
     expect(quotes[0]).toMatchObject({

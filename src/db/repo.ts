@@ -371,21 +371,105 @@ export async function finishSyncRun(
   runId: string,
   status: string,
   details: unknown,
+  errors: SyncErrorRecord[] = [],
 ): Promise<void> {
-  await db
-    .prepare(
-      `UPDATE sync_runs
-         SET status = ?, finished_at = datetime('now'), details_json = ?
-       WHERE run_id = ?`,
-    )
-    .bind(status, JSON.stringify(details), runId)
-    .run();
+  const statements = [
+    db
+      .prepare(
+        `UPDATE sync_runs
+           SET status = ?, finished_at = datetime('now'), details_json = ?
+         WHERE run_id = ?`,
+      )
+      .bind(status, JSON.stringify(details), runId),
+  ];
+
+  for (const error of errors) {
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO sync_errors
+             (run_id, provider, external_id, market, symbol, scope, status, code, attempts, path, message)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          runId,
+          error.provider,
+          error.externalId,
+          error.market,
+          error.symbol,
+          error.scope,
+          error.status,
+          error.code,
+          error.attempts,
+          error.path,
+          error.message,
+        ),
+    );
+  }
+
+  await db.batch(statements);
+}
+
+export interface SyncErrorRecord {
+  runId: string;
+  scope: string;
+  message: string;
+  provider?: string | null;
+  externalId?: string | null;
+  market?: string | null;
+  symbol?: string | null;
+  status?: number | null;
+  code?: string | null;
+  attempts?: number | null;
+  path?: string | null;
 }
 
 export async function listRecentRuns(db: D1Database, limit = 20): Promise<unknown[]> {
   const { results } = await db
     .prepare("SELECT * FROM sync_runs ORDER BY id DESC LIMIT ?")
     .bind(limit)
+    .all();
+  return results ?? [];
+}
+
+export interface SyncRunRow {
+  run_id: string;
+  provider: string | null;
+  source: string;
+  status: string;
+  started_at: string;
+  finished_at: string | null;
+  details_json: string | null;
+}
+
+export async function getLatestSyncRun(db: D1Database): Promise<SyncRunRow | null> {
+  const row = await db
+    .prepare(
+      `SELECT run_id, provider, source, status, started_at, finished_at, details_json
+         FROM sync_runs ORDER BY id DESC LIMIT 1`,
+    )
+    .first<SyncRunRow>();
+  return row ?? null;
+}
+
+export async function getSyncRun(db: D1Database, runId: string): Promise<SyncRunRow | null> {
+  const row = await db
+    .prepare(
+      `SELECT run_id, provider, source, status, started_at, finished_at, details_json
+         FROM sync_runs WHERE run_id = ?`,
+    )
+    .bind(runId)
+    .first<SyncRunRow>();
+  return row ?? null;
+}
+
+export async function listSyncErrors(db: D1Database, runId: string): Promise<unknown[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT provider, external_id, market, symbol, scope, status, code, attempts, path, message, created_at
+         FROM sync_errors WHERE run_id = ? ORDER BY id ASC`,
+    )
+    .bind(runId)
     .all();
   return results ?? [];
 }

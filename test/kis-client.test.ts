@@ -75,4 +75,43 @@ describe("KisClient", () => {
 
     await expect(client.get("/uapi/x", "TTTC0000R", {})).rejects.toBeInstanceOf(KisApiError);
   });
+
+  it("treats a 5xx JSON body without rt_cd as an error", async () => {
+    const { client } = createClient((url) => {
+      if (url.includes("/oauth2/tokenP")) return jsonResponse(TOKEN_BODY);
+      return jsonResponse({ msg1: "bad gateway" }, {}, 502);
+    });
+
+    await expect(client.get("/uapi/x", "TTTC0000R", {})).rejects.toMatchObject({
+      name: "KisApiError",
+      status: 502,
+    });
+  });
+
+  it("treats a 5xx with rt_cd 0 as an error", async () => {
+    const { client } = createClient((url) => {
+      if (url.includes("/oauth2/tokenP")) return jsonResponse(TOKEN_BODY);
+      return jsonResponse({ rt_cd: "0" }, {}, 500);
+    });
+
+    await expect(client.get("/uapi/x", "TTTC0000R", {})).rejects.toMatchObject({
+      name: "KisApiError",
+      status: 500,
+    });
+  });
+
+  it("retries a transient 5xx and then succeeds", async () => {
+    let apiCalls = 0;
+    const { client } = createClient((url) => {
+      if (url.includes("/oauth2/tokenP")) return jsonResponse(TOKEN_BODY);
+      apiCalls += 1;
+      if (apiCalls === 1) return new Response("<html>bad gateway</html>", { status: 503 });
+      return jsonResponse({ rt_cd: "0", output1: [] });
+    });
+
+    const result = await client.get<{ rt_cd?: string }>("/uapi/x", "TTTC0000R", {});
+
+    expect(apiCalls).toBe(2);
+    expect(result.body.rt_cd).toBe("0");
+  });
 });

@@ -1,5 +1,13 @@
 import { RateLimiter, withRetry } from "../../lib/rateLimit";
 import { logger } from "../../lib/logger";
+import { markAttempts } from "../../lib/errors";
+import {
+  isTransientHttp,
+  parseRetryAfter,
+  recordRetry,
+  requestSignal,
+  retryAfterMsOf,
+} from "../../lib/retryPolicy";
 import { getAccessToken, invalidateAccessToken } from "./auth";
 import { isKisApiError, KisApiError } from "./errors";
 import type { KisEnvelope } from "./types";
@@ -30,7 +38,9 @@ export interface KisRequestInit {
   headers?: Record<string, string>;
 }
 
-const RETRY_ON = (error: unknown): boolean => isKisApiError(error) && error.isRateLimit();
+/** Retry throttling (EGW00201/EGW00133) and transport-level 429/5xx/network errors. */
+const RETRY_ON = (error: unknown): boolean =>
+  (isKisApiError(error) && error.isRateLimit()) || isTransientHttp(error);
 
 export class KisClient {
   private readonly fetchImpl: typeof fetch;
@@ -49,6 +59,7 @@ export class KisClient {
     trId: string,
     init: KisRequestInit,
   ): Promise<KisCallResult<T>> {
+    let attempts = 0;
     return withRetry(
       async () => {
         await this.options.rateLimiter.wait();
@@ -91,6 +102,7 @@ export class KisClient {
             custtype: "P",
             ...init.headers,
           },
+          signal: requestSignal(),
         });
 
         const text = await response.text();
@@ -103,6 +115,22 @@ export class KisClient {
             trId,
             status: response.status,
             body: text,
+            retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
+          });
+        }
+
+        // KIS returns logical errors as HTTP 200 with `rt_cd != "0"`, but a
+        // gateway/proxy can also answer with a 5xx whose body happens to be
+        // JSON. Never treat a non-2xx as success, even if the body parses.
+        if (!response.ok) {
+          throw new KisApiError(body.msg1 ?? `KIS HTTP ${response.status}`, {
+            msgCd: body.msg_cd ?? null,
+            rtCd: body.rt_cd ?? null,
+            path,
+            trId,
+            status: response.status,
+            body,
+            retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
           });
         }
 
@@ -115,6 +143,7 @@ export class KisClient {
             trId,
             status: response.status,
             body,
+            retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
           });
         }
 
@@ -125,8 +154,14 @@ export class KisClient {
         baseDelayMs: 500,
         maxDelayMs: 4_000,
         shouldRetry: RETRY_ON,
+        onRetry: () => {
+          attempts += 1;
+          recordRetry();
+        },
+        delayFor: (error, _attempt, fallbackMs) => retryAfterMsOf(error) ?? fallbackMs,
       },
     ).catch(async (error: unknown) => {
+      markAttempts(error, attempts + 1);
       if (error instanceof KisApiError && error.isTokenError()) {
         await invalidateAccessToken(this.options.cache, this.options.env, this.options.appkey);
       }
