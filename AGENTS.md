@@ -45,7 +45,7 @@ Always run `pnpm test` and `pnpm typecheck` after changes.
   OAuth2 client** (`TOSS_CREDENTIALS`) serves all accounts, addressed with the
   `X-Tossinvest-Account: <accountSeq>` header (stored in `meta.accountSeq`). One
   Toss account holds both KR and US, so it is registered as **two rows** —
-  `<accountSeq>` (KRX) and `<accountSeq>-us` (US, `meta.product="us"`) — matching
+  `<accountNo>` (KRX) and `<accountNo>-us` (US, `meta.product="us"`) — matching
   the per-product cron split. It also requires an IP allowlist, so it egresses
   via `TOSS_BASE_URL` (a Caddy proxy, `deploy/caddy/toss.caddy`) sending
   `TOSS_RELAY_SECRET` as `X-Toss-Relay`.

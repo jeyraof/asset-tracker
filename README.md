@@ -44,7 +44,7 @@ appkey/appsecret**이 필요하므로, 이를 `KIS_CREDENTIALS` secret(계좌 ex
 - `src/providers/toss/` 추가, `registry`에 등록. **사용자당 단일 OAuth2 client**
   (`TOSS_CREDENTIALS={clientId,clientSecret}`) + `X-Tossinvest-Account: <accountSeq>`
   헤더. 한 계좌가 KR+US를 함께 보유하므로 **두 행**으로 등록:
-  `<accountSeq>`(KRX) / `<accountSeq>-us`(US, `meta.product="us"`).
+  `<accountNo>`(KRX) / `<accountNo>-us`(US, `meta.product="us"`).
 - 매핑: 보유 `GET /api/v1/holdings`(시장별 필터, `Price{krw,usd}` 합산), 예수금은
   `GET /api/v1/buying-power`(`cashBuyingPower`)로 **근사**(순자산 = 주식+현금 파생,
   없는 통화 합계는 0), 체결은 `GET /api/v1/orders?status=CLOSED`(커서 페이징,

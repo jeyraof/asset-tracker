@@ -134,7 +134,9 @@ function toAccount(
   if (accountNo) meta["accountNo"] = accountNo;
   if (product === "us") meta["product"] = "us";
 
-  const externalId = product === "us" ? `${accountSeq}-us` : String(accountSeq);
+  // Identify accounts by the real account number; fall back to the accountSeq.
+  const base = accountNo ?? String(accountSeq);
+  const externalId = product === "us" ? `${base}-us` : base;
   return {
     id: 0,
     provider: "toss",
