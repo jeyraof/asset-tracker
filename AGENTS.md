@@ -57,16 +57,17 @@ Always run `pnpm test` and `pnpm typecheck` after changes.
   the KRX run (`stock`+`gold`) fires at KST 20:30, and the US run (`us`) fires at
   KST 07:00 after the US regular close. `src/index.ts` picks the date/`products`
   from `controller.cron`; the US run uses the **ET** session date (`etDate`), not KST.
-- FX is a **separate task** (`src/sync/fx.ts`, `syncFxRates`) keyed to the **KST**
-  date, stored in `fx_rates`. It is runnable on its own via `POST /sync/fx` and is
-  also invoked alongside the US cron as an independent `ctx.waitUntil` (its
-  failure never affects the holdings snapshot). A provider opts in by implementing
-  the optional `BrokerProvider.getFxRate`; providers without it (KIS) are skipped.
-  Keep FX provider-agnostic: no TR_IDs or broker field names outside `providers/`.
-  Note: `fx_rates.date` is the KST date the rate was observed (not a date from the
-  response, which carries none), while US snapshots are keyed to the ET session
-  date; the US cron runs KST morning, so the two are a day apart — worth keeping in
-  mind when valuing US holdings with FX (`created_at` holds the exact UTC instant).
+- FX is a **separate task** (`src/sync/fx.ts`, `syncFxRates`) stored in `fx_rates`.
+  It runs on its own cron at **KST Mon-Fri 12:00** (UTC `0 3 * * 2-6`, after Korea
+  Eximbank publishes ~11:00) and via `POST /sync/fx`; its failure never affects a
+  holdings snapshot. The source is **Korea Eximbank's 매매기준율** (`deal_bas_r`) in
+  `src/fx/koreaexim.ts`, implementing the market-data `FxSource` — **not** a
+  `BrokerProvider` (no accounts). Keep FX source-agnostic: no broker/`koreaexim`
+  field names outside `src/fx/`. `fx_rates.date` is the **actual quote (business)
+  day**; the source searches back up to 7 days for the latest published day
+  (weekends/holidays have none). US snapshots are keyed to the ET session date,
+  which is a day apart from the KST quote day — keep that in mind when valuing US
+  holdings with FX (`created_at` holds the exact UTC instant).
 
 ## Conventions
 
@@ -140,12 +141,12 @@ Always run `pnpm test` and `pnpm typecheck` after changes.
   `usa06012`'s `strt_dt` is an **inclusive base date** (candles come back
   descending from it) — send `strt_dt=date`, not the window start, or the
   lookback window silently comes back empty.
-- US FX uses `ust31301` (환율 조회, `POST /api/us/exchange`) from the FX task. The
-  body requires `exch_tp` (`1` = KRW→USD, `2` = USD→KRW; we send `2`) and the
-  response is a flat envelope: `aplc_exrt` (적용환율, preferred), `sell_aplc_exrt`,
-  `buy_aplc_exrt`. The response carries no date, so the task's KST date is stored;
-  only USD→KRW is mapped. Verified against Kiwoom's official example repo
-  (2026-09-21); the live `1511` error without `exch_tp` confirmed it.
+- FX comes from **Korea Eximbank's 매매기준율** (`src/fx/koreaexim.ts`,
+  `data=AP01`, `deal_bas_r`), not a broker. It is published ~11:00 KST on business
+  days, so the FX cron runs KST 12:00 (UTC `0 3 * * 2-6`) and the source searches
+  back up to 7 days when a date has no data. The authkey goes in the query string
+  (`KOREAEXIM_API_KEY`); never log the full URL. `result` codes: 2=data, 3=auth,
+  4=daily quota. Only USD→KRW is mapped.
 - Kiwoom REST does **not** expose US fractional (소수점) holdings yet. `ust21070`/  `ust21170` return whole shares only (`poss_qty` is an integer); fractional
   quantities appear only in trades (`ust21100` `deal_qty`, kind `소수점매매`).
   The fractional *value* is folded into the aggregate endpoints (`ust21120`/

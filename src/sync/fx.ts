@@ -1,38 +1,42 @@
 import type { Env } from "../env";
-import type { BrokerProvider } from "../domain/types";
-import { getProvider, listKnownProviders } from "../providers/registry";
+import type { FxSource } from "../domain/types";
+import { getFxSource, listKnownFxSources } from "../fx/registry";
 import * as repo from "../db/repo";
 import { kstDate } from "../lib/dates";
-import { errorCode, errorText } from "../lib/errors";
+import { describeError } from "../lib/errors";
 import { logger } from "../lib/logger";
 
 export interface FxSyncOptions {
-  /** Rate date (YYYY-MM-DD, KST). Defaults to today in KST. */
+  /** Search-from date (YYYY-MM-DD, KST). Defaults to today in KST. */
   date?: string;
-  /** Restrict to a single provider id, e.g. "kiwoom". */
-  provider?: string;
+  /** Restrict to a single FX source id, e.g. "koreaexim". */
+  source?: string;
   /** Base currency. Defaults to "USD". */
   base?: string;
   /** Quote currency. Defaults to "KRW". */
   quote?: string;
-  /** Run origin: "cron" | "http". */
-  source?: string;
 }
 
 export interface FxRateResult {
-  provider: string;
+  source: string;
   base: string;
   quote: string;
   rate: number | null;
+  /** Actual quote (business) date the rate applies to; null when unavailable. */
+  date: string | null;
 }
 
 export interface FxSyncError {
   scope: string;
   message: string;
   code?: string;
+  status?: number;
+  attempts?: number;
+  path?: string;
 }
 
 export interface FxSyncReport {
+  /** The date the search started from (YYYY-MM-DD, KST). */
   date: string;
   base: string;
   quote: string;
@@ -42,9 +46,10 @@ export interface FxSyncReport {
 }
 
 /**
- * Fetches and stores spot FX rates. This is a standalone task: it needs no
- * holdings, runs independently via `POST /sync/fx`, and is also invoked
- * alongside the US cron. Providers without `getFxRate` are skipped.
+ * Fetches and stores the reference FX rate. This is a standalone task: it needs
+ * no holdings, runs on its own cron (and via `POST /sync/fx`), and iterates the
+ * market `FxSource`s in `src/fx/`. Sources that cannot be constructed (e.g. a
+ * missing API key) are only an error when explicitly requested.
  */
 export async function syncFxRates(env: Env, options: FxSyncOptions = {}): Promise<FxSyncReport> {
   const startedAt = Date.now();
@@ -53,43 +58,49 @@ export async function syncFxRates(env: Env, options: FxSyncOptions = {}): Promis
   const quote = options.quote ?? "KRW";
 
   const report: FxSyncReport = { date, base, quote, rates: [], errors: [], durationMs: 0 };
-  const candidateIds = options.provider ? [options.provider] : listKnownProviders();
+  const candidateIds = options.source ? [options.source] : listKnownFxSources();
 
   for (const id of candidateIds) {
-    let provider: BrokerProvider;
+    let source: FxSource;
     try {
-      provider = getProvider(id, { env });
+      source = getFxSource(id, env);
     } catch (error) {
-      // A provider missing credentials is only an error when explicitly asked for.
-      if (options.provider) {
-        report.errors.push({ scope: `provider:${id}`, message: errorText(error), code: errorCode(error) });
-      }
+      const details = describeError(error);
+      report.errors.push({ scope: `source:${id}`, ...details });
+      logger.error("fx source unavailable", { source: id, message: details.message });
       continue;
     }
 
-    if (typeof provider.getFxRate !== "function") continue;
-
     try {
-      const rate = await provider.getFxRate(base, quote, date);
+      const rate = await source.getFxRate(base, quote, date);
       if (!rate) {
-        logger.info("fx rate unavailable", { provider: id, base, quote, date });
-        report.rates.push({ provider: id, base, quote, rate: null });
+        logger.info("fx rate unavailable", { source: id, base, quote, date });
+        report.rates.push({ source: id, base, quote, rate: null, date: null });
         continue;
       }
 
       await repo.upsertFxRates(env.DB, [rate]);
-      report.rates.push({ provider: id, base: rate.base, quote: rate.quote, rate: rate.rate });
+      report.rates.push({ source: id, base: rate.base, quote: rate.quote, rate: rate.rate, date: rate.date });
       logger.info("fx rate synced", {
-        provider: id,
+        source: id,
         base: rate.base,
         quote: rate.quote,
         rate: rate.rate,
-        date,
+        date: rate.date,
       });
     } catch (error) {
-      const message = errorText(error);
-      report.errors.push({ scope: `fx:${id}`, message, code: errorCode(error) });
-      logger.error("fx rate sync failed", { provider: id, base, quote, date, message, code: errorCode(error) });
+      const details = describeError(error);
+      report.errors.push({ scope: `fx:${id}`, ...details });
+      logger.error("fx rate sync failed", {
+        source: id,
+        base,
+        quote,
+        date,
+        message: details.message,
+        code: details.code,
+        status: details.status,
+        attempts: details.attempts,
+      });
     }
   }
 

@@ -37,4 +37,10 @@ export interface Env {
 
   /** Set to "1" to log outgoing Kiwoom requests (never logs secrets). */
   DEBUG_KIWOOM?: string;
+
+  /**
+   * Korea Eximbank (한국수출입은행) Open API auth key for the reference FX rate
+   * (`deal_bas_r`). Wrangler secret.
+   */
+  KOREAEXIM_API_KEY?: string;
 }

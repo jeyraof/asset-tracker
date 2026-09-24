@@ -228,16 +228,3 @@ export interface KiwoomUsCandleRaw {
 export interface KiwoomUsDailyChartResponse extends KiwoomEnvelope {
   result_list?: KiwoomUsCandleRaw[];
 }
-
-/**
- * US FX rate (ust31301, /api/us/exchange). `exch_tp`: 1 = KRW→USD, 2 = USD→KRW.
- * Verified against the official example repo (2026-09-21).
- */
-export interface KiwoomUsFxRateResponse extends KiwoomEnvelope {
-  aplc_exrt?: string;
-  sell_aplc_exrt?: string;
-  buy_aplc_exrt?: string;
-  exrt_tp_nm?: string;
-  spcl_bf_exrt?: string;
-  exrt_spcl_rt?: string;
-}

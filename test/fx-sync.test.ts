@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
-import type { BrokerProvider, FxRate } from "../src/domain/types";
+import type { FxRate, FxSource } from "../src/domain/types";
 
-const { providers } = vi.hoisted(() => ({ providers: new Map<string, BrokerProvider>() }));
+const { sources } = vi.hoisted(() => ({ sources: new Map<string, FxSource>() }));
 
-vi.mock("../src/providers/registry", () => ({
-  listKnownProviders: () => ["kis", "kiwoom"],
-  getProvider: (id: string) => {
-    const provider = providers.get(id);
-    if (!provider) throw new Error(`no fake provider for ${id}`);
-    return provider;
+vi.mock("../src/fx/registry", () => ({
+  listKnownFxSources: () => [...sources.keys()],
+  getFxSource: (id: string) => {
+    const source = sources.get(id);
+    if (!source) throw new Error(`no fake source for ${id}`);
+    return source;
   },
 }));
 
@@ -30,60 +30,54 @@ function createFakeDb() {
   return { db, binds };
 }
 
-function baseProvider(id: string): BrokerProvider {
-  return {
-    id,
-    defaultMarket: "US",
-    defaultCountry: "US",
-    defaultCurrency: "USD",
-    supportsMarket: () => true,
-    getBalance: async () => {
-      throw new Error("unused");
-    },
-    getTrades: async () => [],
-    getDailyQuotes: async () => ({ quotes: [], failures: [] }),
-  };
-}
-
-function fxProvider(id: string, rate: FxRate | null): BrokerProvider {
-  return {
-    ...baseProvider(id),
-    getFxRate: async () => rate,
-  };
+function fakeSource(id: string, rate: FxRate | null): FxSource {
+  return { id, getFxRate: async () => rate };
 }
 
 const USD_KRW: FxRate = {
   base: "USD",
   quote: "KRW",
-  date: "2026-09-21",
-  rate: 1524.5,
-  provider: "kiwoom",
-  source: "kiwoom-us-fx-rate",
+  date: "2026-09-23",
+  rate: 1385.5,
+  provider: "koreaexim",
+  source: "koreaexim-deal-bas-r",
   raw: {},
 };
 
-beforeEach(() => providers.clear());
+beforeEach(() => sources.clear());
 
 describe("syncFxRates", () => {
-  it("stores rates for FX-capable providers and skips the rest", async () => {
-    providers.set("kis", baseProvider("kis"));
-    providers.set("kiwoom", fxProvider("kiwoom", USD_KRW));
+  it("stores the rate and reports the source's quote date", async () => {
+    sources.set("koreaexim", fakeSource("koreaexim", USD_KRW));
     const { db, binds } = createFakeDb();
 
     const report = await syncFxRates({ DB: db } as unknown as Env);
 
     expect(report.date).toBe(kstDate());
     expect(report.rates).toEqual([
-      { provider: "kiwoom", base: "USD", quote: "KRW", rate: 1524.5 },
+      { source: "koreaexim", base: "USD", quote: "KRW", rate: 1385.5, date: "2026-09-23" },
     ]);
     expect(report.errors).toEqual([]);
     expect(binds).toHaveLength(1);
-    expect(binds[0]?.slice(0, 4)).toEqual(["USD", "KRW", "2026-09-21", 1524.5]);
+    expect(binds[0]?.slice(0, 4)).toEqual(["USD", "KRW", "2026-09-23", 1385.5]);
   });
 
-  it("records a per-provider error and keeps going", async () => {
-    providers.set("kiwoom", {
-      ...baseProvider("kiwoom"),
+  it("reports a null rate when the source has no data", async () => {
+    sources.set("koreaexim", fakeSource("koreaexim", null));
+    const { db, binds } = createFakeDb();
+
+    const report = await syncFxRates({ DB: db } as unknown as Env);
+
+    expect(report.rates).toEqual([
+      { source: "koreaexim", base: "USD", quote: "KRW", rate: null, date: null },
+    ]);
+    expect(report.errors).toEqual([]);
+    expect(binds).toHaveLength(0);
+  });
+
+  it("records a source error and keeps going", async () => {
+    sources.set("koreaexim", {
+      id: "koreaexim",
       getFxRate: async () => {
         throw new Error("fx down");
       },
@@ -93,16 +87,16 @@ describe("syncFxRates", () => {
     const report = await syncFxRates({ DB: db } as unknown as Env);
 
     expect(report.rates).toEqual([]);
-    expect(report.errors).toEqual([{ scope: "fx:kiwoom", message: "fx down", code: undefined }]);
+    expect(report.errors).toEqual([{ scope: "fx:koreaexim", message: "fx down" }]);
   });
 
-  it("surfaces provider construction errors only when explicitly requested", async () => {
+  it("surfaces source construction errors only when explicitly requested", async () => {
     const { db } = createFakeDb();
 
     const implicit = await syncFxRates({ DB: db } as unknown as Env);
     expect(implicit.errors).toEqual([]);
 
-    const explicit = await syncFxRates({ DB: db } as unknown as Env, { provider: "kiwoom" });
-    expect(explicit.errors[0]).toMatchObject({ scope: "provider:kiwoom" });
+    const explicit = await syncFxRates({ DB: db } as unknown as Env, { source: "koreaexim" });
+    expect(explicit.errors[0]).toMatchObject({ scope: "source:koreaexim" });
   });
 });

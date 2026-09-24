@@ -161,10 +161,18 @@ export interface BrokerProvider {
 
   /** Daily OHLC quotes as of `date` for the given instruments. */
   getDailyQuotes(instruments: InstrumentRef[], date: string): Promise<QuoteFetchResult>;
+}
 
+/**
+ * A market FX rate source — deliberately not a `BrokerProvider`: it has no
+ * accounts, balances, or quotes, only a reference rate. The standalone FX task
+ * iterates these; source-specific field names stay inside `src/fx/`.
+ */
+export interface FxSource {
+  readonly id: string;
   /**
-   * Optional spot FX rate for a currency pair as of `date`. Providers that have
-   * no FX endpoint simply omit it; the separate FX task skips them.
+   * Spot rate for the pair, searching back from `searchDate` to the most
+   * recently published business day. The returned `date` is that business day.
    */
-  getFxRate?(base: Currency, quote: Currency, date: string): Promise<FxRate | null>;
+  getFxRate(base: Currency, quote: Currency, searchDate: string): Promise<FxRate | null>;
 }

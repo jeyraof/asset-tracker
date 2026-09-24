@@ -13,8 +13,11 @@ const MAX_LOOKBACK_DAYS = 90;
 /**
  * US accounts run separately after the US regular session closes: UTC Mon-Fri
  * 22:00 = KST Tue-Sat 07:00. The KRX run stays at UTC Mon-Fri 11:30 (KST 20:30).
+ * FX runs on its own at UTC Mon-Fri 03:00 (KST 12:00), after Korea Eximbank
+ * publishes the day's 매매기준율 (~11:00 KST).
  */
 const US_CRON = "0 22 * * 2-6";
+const FX_CRON = "0 3 * * 2-6";
 const KRX_PRODUCTS = ["stock", "gold"] as const;
 const US_PRODUCTS = ["us"] as const;
 
@@ -103,17 +106,32 @@ async function handleFxSync(request: Request, url: URL, env: Env): Promise<Respo
   const date = pickString(body["date"]) ?? pickString(url.searchParams.get("date")) ?? kstDate();
   if (!isValidDateString(date)) return json({ error: `invalid date: ${date}` }, 400);
 
-  const provider = pickString(body["provider"]) ?? pickString(url.searchParams.get("provider"));
+  const fxSource = pickString(body["source"]) ?? pickString(url.searchParams.get("source"));
   const base = pickString(body["base"]) ?? pickString(url.searchParams.get("base"));
   const quote = pickString(body["quote"]) ?? pickString(url.searchParams.get("quote"));
 
-  const report = await syncFxRates(env, { date, provider, base, quote, source: "http" });
+  const report = await syncFxRates(env, { date, source: fxSource, base, quote });
   return json(report, report.errors.length > 0 ? 502 : 200);
 }
 
 export default {
   async scheduled(controller, env, ctx) {
     const scheduledAt = new Date(controller.scheduledTime);
+
+    // FX is a separate task keyed to the KST date; its failure never affects
+    // the holdings snapshot.
+    if (controller.cron === FX_CRON) {
+      ctx.waitUntil(
+        syncFxRates(env).catch((error: unknown) => {
+          logger.error("scheduled fx sync failed", {
+            date: kstDate(scheduledAt),
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }),
+      );
+      return;
+    }
+
     const isUs = controller.cron === US_CRON;
     // US accounts snapshot on the just-closed US session date (ET), not KST.
     const date = isUs ? etDate(scheduledAt) : kstDate(scheduledAt);
@@ -128,19 +146,6 @@ export default {
         });
       }),
     );
-
-    // FX is a separate task keyed to the KST date; run it only with the US cron
-    // and never let its failure affect the holdings snapshot.
-    if (isUs) {
-      ctx.waitUntil(
-        syncFxRates(env, { source: "cron" }).catch((error: unknown) => {
-          logger.error("scheduled fx sync failed", {
-            date: kstDate(scheduledAt),
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }),
-      );
-    }
   },
 
   async fetch(request, env) {

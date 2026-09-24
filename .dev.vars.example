@@ -29,3 +29,7 @@ ADMIN_TOKEN="change-me"
 
 # Optional: default accounts for `npm run kiwoom:accounts` when no flags are given.
 # KIWOOM_ACCOUNTS="12345678"
+
+# Korea Eximbank (한국수출입은행) Open API auth key, for the reference FX rate.
+# Issue at https://www.koreaexim.go.kr/ir/HPHKIR020M01?apino=2&viewtype=C
+# KOREAEXIM_API_KEY="your-auth-key"

@@ -81,27 +81,25 @@ appkey/appsecret**이 필요하므로, 이를 `KIS_CREDENTIALS` secret(계좌 ex
 - US 티커는 `stripSymbol`을 태우지 않는다(7자 `A/J/Q` 티커 손상 방지).
 - `pnpm test` 88 passed, `pnpm typecheck` 통과.
 
-### 키움 미국주식 환율 기록 (2026-09-21)
+### 환율 원천: 한국수출입은행 매매기준율
 
 - **별개 태스크**: `src/sync/fx.ts`(`syncFxRates`)가 환율 조회·보관을 담당한다.
-  보유종목과 무관하게 단독 실행되며 `POST /sync/fx`로 수동 실행할 수 있다. US 크론
-  (`0 22 * * 2-6`)에서 `runSync`와 **별도 `ctx.waitUntil`**로 함께 돌기 때문에 환율
-  실패가 보유 스냅샷에 영향을 주지 않는다.
-- **기준일 KST**: 보유 스냅샷은 ET 세션 날짜를 쓰지만, 환율은 한국 고시 기준에 맞춰
-  **KST 날짜**로 기록한다.
-- 참고: 환율의 `date`는 그 실행에서 환율을 조회한 KST 날짜(레코드의 기준일)이며,
-  환율 API 응답이 준 날짜가 아니다. US 크론은 KST 이른 아침(07:00)에 돌아 ET 세션보다
-  하루 뒤이므로, 미국 보유와 환율을 함께 계산할 때는 이 하루 차이를 염두에 둔다
-  (정확한 관측 시각은 `fx_rates.created_at`(UTC)에 남는다).
-- **출처/저장**: 키움 환율 조회 `ust31301`(`/api/us/exchange`, body `exch_tp=2`
-  = USD→KRW) → `fx_rates` (`base_currency`, `quote_currency`, `date`, `rate`,
-  `provider`, `source`, `raw_json`; `UNIQUE (base, quote, date)`). 응답은
-  `aplc_exrt`(적용환율, 우선) / `sell_aplc_exrt` / `buy_aplc_exrt` 평면 구조이며
-  날짜가 없어 태스크의 KST 날짜를 기록한다. 현재 USD→KRW만 매핑한다.
-- **provider-agnostic**: `BrokerProvider.getFxRate`는 선택 메서드다. 미구현 provider
-  (KIS)는 건너뛰며, `fx_rates` 스키마에는 브로커 필드가 없다.
-- 라이브 확인(2026-09-21): `ust31301`은 `exch_tp`가 없으면 `1511`을 반환한다.
-- `pnpm test` 95 passed, `pnpm typecheck` 통과.
+  보유종목과 무관하게 **자체 크론(KST 월–금 12:00 = UTC `0 3 * * 2-6`)** 으로 돌고
+  `POST /sync/fx`로 수동 실행할 수 있다. 환율 실패는 보유 스냅샷에 영향을 주지 않는다.
+- **출처**: 한국수출입은행 Open API(`src/fx/koreaexim.ts`)의 **매매기준율**
+  (`deal_bas_r`, `data=AP01`, `oapi.koreaexim.go.kr`). 키움 `ust31301`(환전 적용환율
+  =가환율)은 시장 기준환율이 아니라 평가용으로 부적합해 **제거**했다.
+- **시점**: 고시는 영업일 **오전 11시 전후**라 KST 12:00에 수집한다. 영업일 11시
+  이전·주말·공휴일은 데이터가 없어 **직전 영업일로 최대 7일 역추적**한다.
+- **기준일**: `fx_rates.date`는 관측일이 아니라 **실제 고시(영업)일**이다. US 보유는
+  ET 세션 날짜로 스냅샷되므로 KST 고시일과 하루 어긋날 수 있다.
+- **저장**: `fx_rates` (`base_currency`, `quote_currency`, `date`, `rate`, `provider`,
+  `source`, `raw_json`; `UNIQUE (base, quote, date)`), `provider="koreaexim"`,
+  `source="koreaexim-deal-bas-r"`. 현재 USD→KRW만 매핑한다.
+- **source-agnostic**: 시장 FX 소스는 `BrokerProvider`가 아니라 `FxSource`(계좌 없음)
+  이며 `src/fx/registry.ts`에 등록한다. 브로커/`koreaexim` 필드명은 `src/fx/` 밖으로
+  새지 않는다. 인증키는 `KOREAEXIM_API_KEY`(wrangler secret)다.
+- `pnpm test` 111 passed, `pnpm typecheck` 통과.
 
 ### 계좌 검증/동기화 결과 (2026-09-20, 로컬·원격)
 
@@ -141,9 +139,10 @@ Once a day (and on demand) it:
 4. Fetches **daily OHLC** quotes for every held instrument — **once per
    instrument**, even if several brokers hold it, pinned to the **KRX regular
    session** (unadjusted prices).
-5. Runs a **separate FX task** (only with the US cron) that records the USD/KRW
-   spot rate for the KST date in `fx_rates`. It is independent of holdings and can
-   be run on its own via `POST /sync/fx`; a failure never affects the snapshot.
+5. Runs a **separate FX task** on its own cron that records the USD/KRW market
+   reference rate (Korea Eximbank 매매기준율) in `fx_rates`. It is independent of
+   holdings and can be run on its own via `POST /sync/fx`; a failure never affects
+   the snapshot.
 
 Re-running for the same day overwrites that day's snapshot (`INSERT ... ON
 CONFLICT DO UPDATE`); holdings for the day are replaced wholesale so sold
@@ -170,9 +169,12 @@ src/
     tr-ids.ts               API ids, paths, base URLs
     endpoints/domestic.ts   Raw Kiwoom fields -> normalized domain types
   db/repo.ts               D1 upserts / queries
+  fx/                       Market FX sources (not brokers)
+    koreaexim.ts            Korea Eximbank 매매기준율 (FxSource)
+    registry.ts             source id -> instance
   sync/                     Provider-agnostic engine
     balances.ts trades.ts quotes.ts orchestrator.ts quoteSources.ts
-    fx.ts                    Standalone FX task: fetch/record spot rates
+    fx.ts                    Standalone FX task: fetch/record the reference rate
 ```
 
 The sync engine only talks to the `BrokerProvider` interface, so a new broker is
@@ -188,7 +190,7 @@ a new folder under `src/providers/<id>/` plus one line in the registry.
 | `holdings` | account + date + market + symbol | daily positions |
 | `price_daily` | market + symbol + date | OHLCV |
 | `trades` | account + date + external_id + side | buy/sell fills |
-| `fx_rates` | base + quote + date | spot FX (USD/KRW), provider-agnostic |
+| `fx_rates` | base + quote + date | market reference FX (USD/KRW), source-agnostic |
 | `sync_runs` | run | execution history / status |
 
 ## Cloudflare resources
@@ -205,8 +207,9 @@ It wires:
 - Worker: `asset-tracker`
 - D1: `asset-tracker-db` (binding `DB`) — `<d1-database-id>`
 - KV: `asset-tracker-kv` (binding `CACHE`) — `<kv-namespace-id>`
-- Cron: `30 11 * * 2-6` (UTC Mon-Fri 11:30 = KST Mon-Fri 20:30) for KRX/gold, and
-  `0 22 * * 2-6` (UTC Mon-Fri 22:00 = KST Tue-Sat 07:00) for US. Cloudflare uses
+- Cron: `30 11 * * 2-6` (UTC Mon-Fri 11:30 = KST Mon-Fri 20:30) for KRX/gold,
+  `0 22 * * 2-6` (UTC Mon-Fri 22:00 = KST Tue-Sat 07:00) for US, and
+  `0 3 * * 2-6` (UTC Mon-Fri 03:00 = KST Mon-Fri 12:00) for FX. Cloudflare uses
   Quartz weekdays: 1=Sunday … 7=Saturday, so Mon-Fri is `2-6`.
 
 ## Setup
@@ -349,14 +352,14 @@ curl -H "x-admin-token: $ADMIN_TOKEN" .../runs
 curl -X POST https://asset-tracker.<subdomain>.workers.dev/sync/fx \
   -H "x-admin-token: $ADMIN_TOKEN"
 
-# Explicit date / pair / provider
-curl -X POST "https://asset-tracker.<subdomain>.workers.dev/sync/fx?date=2026-09-21&provider=kiwoom" \
+# Explicit date / pair / source
+curl -X POST "https://asset-tracker.<subdomain>.workers.dev/sync/fx?date=2026-09-21&source=koreaexim" \
   -H "x-admin-token: $ADMIN_TOKEN"
 ```
 
 `POST /sync` accepts a JSON body too: `{ "date": "...", "lookbackDays": 7, "provider": "kis" }`.
 Restrict by product with `products` (comma-separated), e.g. `?products=us` for US accounts only.
-`POST /sync/fx` accepts `{ "date": "...", "provider": "kiwoom", "base": "USD", "quote": "KRW" }`.
+`POST /sync/fx` accepts `{ "date": "...", "source": "koreaexim", "base": "USD", "quote": "KRW" }`.
 
 ## Commands
 
@@ -428,14 +431,13 @@ Worker --HTTPS--> Caddy (whitelisted IP) --HTTPS--> api.kiwoom.com
   one date-range call per account), daily candles `ka10081` (`upd_stkpc_tp=0`,
   unadjusted).
 - US (미국주식) endpoints: balance `ust21070` (`/api/us/acnt`), fills `ust21100`,
-  candles `usa06012` (`/api/us/chart`), exchange `usa10098` (`/api/us/stkinfo`),
-  FX rate `ust31301` (`/api/us/exchange`). Registered as a separate account row
-  with `meta.product="us"`; holdings are valued at the regular-session close. See
-  "키움 미국주식 추가" above.
-- FX (`ust31301`) is fetched by the standalone task `src/sync/fx.ts` and recorded
-  in `fx_rates` for the KST date as USD→KRW. The body requires `exch_tp=2`
-  (USD→KRW); the flat response exposes `aplc_exrt` (적용환율, preferred),
-  `sell_aplc_exrt`, and `buy_aplc_exrt`, and carries no date.
+  candles `usa06012` (`/api/us/chart`), exchange `usa10098` (`/api/us/stkinfo`).
+  Registered as a separate account row with `meta.product="us"`; holdings are
+  valued at the regular-session close. See "키움 미국주식 추가" above.
+- FX is fetched by the standalone task `src/sync/fx.ts` from **Korea Eximbank**
+  (`src/fx/koreaexim.ts`, `data=AP01`, `deal_bas_r` 매매기준율) and recorded in
+  `fx_rates` as USD→KRW. `date` is the actual quote (business) day; the source
+  searches back up to 7 days for the latest published day.
 - Exchange codes: daily candles use the plain 6-digit code (KRX); NXT/unified
   candles require `_NX`/`_AL`, which `stripSymbol` removes so quotes stay KRX
   regular-session. Fills already cover all exchanges (`dmst_stex_tp=%`), while
