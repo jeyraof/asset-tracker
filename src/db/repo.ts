@@ -19,6 +19,7 @@ interface AccountRow {
   country: string;
   currency: string;
   name: string | null;
+  alias: string | null;
   active: number;
   meta_json: string | null;
 }
@@ -42,6 +43,7 @@ function mapAccountRow(row: AccountRow): AccountConfig {
     country: row.country,
     currency: row.currency,
     name: row.name,
+    alias: row.alias,
     active: row.active === 1,
     meta,
   };
@@ -83,7 +85,7 @@ export async function listActiveAccounts(
   db: D1Database,
   provider?: string,
 ): Promise<AccountConfig[]> {
-  const base = `SELECT id, provider, env, external_id, country, currency, name, active, meta_json
+  const base = `SELECT id, provider, env, external_id, country, currency, name, alias, active, meta_json
                 FROM accounts WHERE active = 1`;
   const statement = provider
     ? db.prepare(`${base} AND provider = ? ORDER BY id`).bind(provider)

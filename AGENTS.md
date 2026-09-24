@@ -45,6 +45,9 @@ Always run `pnpm test` and `pnpm typecheck` after changes.
 - New tables/columns require a new file in `migrations/`; never edit an applied
   migration. The schema carries `provider`/`market`/`country`/`currency` so new
   brokers and countries need no schema change.
+- `accounts.alias` is a user-set display name; `resolveAccountName` (in
+  `src/lib/accounts.ts`) falls back to `name`, then `externalId`. Tooling/seeds
+  never write `alias`, so manual values survive re-registration.
 - Re-running a sync must be idempotent: use `ON CONFLICT DO UPDATE`. Holdings for
   a day are replaced (delete + insert in one `db.batch`) to drop sold positions.
 - Accounts opt out of trade sync with `meta.trades = false` (checked by

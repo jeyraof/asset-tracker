@@ -27,6 +27,11 @@ export interface ProviderAccount {
 export interface AccountConfig extends ProviderAccount {
   id: number;
   active: boolean;
+  /**
+   * User-set display name. When present it overrides `name` for presentation;
+   * when empty/absent, callers fall back to `name`, then `externalId`.
+   */
+  alias?: string | null;
 }
 
 export interface BalanceSummary {

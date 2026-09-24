@@ -1,5 +1,6 @@
 import type { Env } from "./env";
 import { etDate, isValidDateString, kstDate } from "./lib/dates";
+import { resolveAccountName } from "./lib/accounts";
 import { logger } from "./lib/logger";
 import { runSync } from "./sync/orchestrator";
 import { syncFxRates } from "./sync/fx";
@@ -194,7 +195,12 @@ export default {
     if (request.method === "GET" && url.pathname === "/accounts") {
       if (!isAuthorized(request, env)) return json({ error: "unauthorized" }, 401);
       const accounts = await listActiveAccounts(env.DB, pickString(url.searchParams.get("provider")));
-      return json({ accounts });
+      return json({
+        accounts: accounts.map((account) => ({
+          ...account,
+          displayName: resolveAccountName(account),
+        })),
+      });
     }
 
     if (request.method === "GET" && url.pathname === "/runs") {
