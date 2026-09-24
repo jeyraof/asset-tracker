@@ -91,6 +91,29 @@ Always run `pnpm test` and `pnpm typecheck` after changes.
 - Tests use fakes for `fetch` and `KVNamespace` (see `test/helpers.ts`); do not
   make real network calls in tests.
 
+## Secrets & PII (public repo)
+
+This repository is **public**. Nothing sensitive may appear in code, docs, tests,
+fixtures, or commit messages/history. See `SECURITY.md` for the full policy.
+
+- **Never commit** real account numbers or broker external ids (KIS `CANO-PRDT`,
+  Kiwoom account numbers), credentials/tokens/API keys, real hostnames or VPS
+  domains, D1/KV ids, or personal data (emails, names, phone numbers).
+- **Secrets** live only as wrangler secrets (`KIS_CREDENTIALS`,
+  `KIWOOM_CREDENTIALS`, `KIWOOM_RELAY_SECRET`, `KOREAEXIM_API_KEY`,
+  `ADMIN_TOKEN`); locally in gitignored files (`.dev.vars`, `*.credentials.json`,
+  token caches). `wrangler.jsonc` and generated `seeds/*.sql` stay gitignored.
+- **Test fixtures**: obviously fake values only (`11111111-01`, `KEY-A`,
+  `TESTKEY`). Never copy values from prod D1 rows, API responses, or `raw_json`.
+- **Docs/examples**: placeholders only (`<subdomain>`, `example.com`,
+  `<8-digit-CANO>`, `<d1-database-id>`, `<RELAY_SECRET>`).
+- **Logging**: never log a full URL carrying a key in the query string (e.g.
+  Korea Eximbank `authkey`); log the host/path or a masked value.
+- **Before every commit**: review `git diff --cached` for the patterns above.
+- **If something leaks**: rotate it, purge it from history
+  (`git filter-repo`/`filter-branch`) and force-push; treat any pushed value as
+  compromised.
+
 ## Gotchas
 
 - KIS returns HTTP 200 with `rt_cd != "0"` on logical errors — always check.
