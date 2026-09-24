@@ -112,7 +112,12 @@ describe("TossProvider", () => {
 
     const result = await provider.getBalance(account(1), "2026-09-20");
 
-    expect(result.summary).toMatchObject({ currency: "KRW", depositTotal: 987654, totalEvalAmount: 1_100_000 });
+    expect(result.summary).toMatchObject({
+      currency: "KRW",
+      depositTotal: 987654,
+      totalEvalAmount: 1_100_000,
+      netAssetAmount: 2_087_654,
+    });
     expect(result.holdings.map((holding) => holding.symbol)).toEqual(["005930"]);
 
     const holdingsCall = mock.calls.find((entry) => entry.url.includes("/api/v1/holdings"));
@@ -124,7 +129,12 @@ describe("TossProvider", () => {
 
     const result = await provider.getBalance(account(1, "us"), "2026-09-20");
 
-    expect(result.summary).toMatchObject({ currency: "USD", depositTotal: 123.45 });
+    expect(result.summary).toMatchObject({
+      currency: "USD",
+      depositTotal: 123.45,
+      totalEvalAmount: 550,
+      netAssetAmount: 673.45,
+    });
     expect(result.holdings.map((holding) => holding.symbol)).toEqual(["AAPL"]);
   });
 

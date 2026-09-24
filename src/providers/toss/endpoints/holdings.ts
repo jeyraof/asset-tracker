@@ -77,11 +77,15 @@ export function mapTossBalance(
     currency,
     depositTotal,
     nextDaySettlement: null,
-    totalEvalAmount: evalAmount,
-    securitiesEvalAmount: evalAmount,
-    purchaseAmountTotal: priceFor(overview.totalPurchaseAmount, currency),
-    evalPflsAmount: priceFor(overview.profitLoss?.amount, currency),
-    netAssetAmount: null,
+    // Toss omits a currency's totals when there are no holdings in that market;
+    // store 0 so an existing account row still shows a value.
+    totalEvalAmount: evalAmount ?? 0,
+    securitiesEvalAmount: evalAmount ?? 0,
+    purchaseAmountTotal: priceFor(overview.totalPurchaseAmount, currency) ?? 0,
+    evalPflsAmount: priceFor(overview.profitLoss?.amount, currency) ?? 0,
+    // Toss has no net-asset field, so derive it as securities + cash (approx).
+    netAssetAmount:
+      evalAmount !== null || depositTotal !== null ? (evalAmount ?? 0) + (depositTotal ?? 0) : null,
     raw: overview,
   };
 

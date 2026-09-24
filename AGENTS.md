@@ -198,7 +198,9 @@ fixtures, or commit messages/history. See `SECURITY.md` for the full policy.
   (0.1077 = 10.77%) so `mapTossBalance` multiplies by 100.
 - Toss has **no cash field in holdings**: `depositTotal` is approximated from
   `GET /api/v1/buying-power` (`cashBuyingPower`, one extra call per account).
-  `netAssetAmount`/`nextDaySettlement` stay `null`.
+  `nextDaySettlement` stays `null`. `netAssetAmount` is **derived** as securities
+  + cash (`marketValue.amount + deposit`); a per-currency total that Toss omits
+  (no holdings in that market) is stored as `0`.
 - Toss fills come from `GET /api/v1/orders?status=CLOSED` (order history, cursor
   paging, one account per call). Only order types orderable via Open API are
   returned (장전/장후 시간외 등은 누락), so trade history can be incomplete; it is

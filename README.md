@@ -46,9 +46,9 @@ appkey/appsecret**이 필요하므로, 이를 `KIS_CREDENTIALS` secret(계좌 ex
   헤더. 한 계좌가 KR+US를 함께 보유하므로 **두 행**으로 등록:
   `<accountSeq>`(KRX) / `<accountSeq>-us`(US, `meta.product="us"`).
 - 매핑: 보유 `GET /api/v1/holdings`(시장별 필터, `Price{krw,usd}` 합산), 예수금은
-  `GET /api/v1/buying-power`(`cashBuyingPower`)로 **근사**, 체결은
-  `GET /api/v1/orders?status=CLOSED`(커서 페이징, `execution` 사용), 일봉은
-  `GET /api/v1/candles?interval=1d&adjusted=false`.
+  `GET /api/v1/buying-power`(`cashBuyingPower`)로 **근사**(순자산 = 주식+현금 파생,
+  없는 통화 합계는 0), 체결은 `GET /api/v1/orders?status=CLOSED`(커서 페이징,
+  `execution` 사용), 일봉은 `GET /api/v1/candles?interval=1d&adjusted=false`.
 - IP 허용 필요 → 키움과 동일하게 Caddy 리버스 프록시
   (`deploy/caddy/toss.caddy`, `TOSS_BASE_URL`, `X-Toss-Relay`/`TOSS_RELAY_SECRET`).
 - 주의: Open API로 접수 가능한 호가유형만 `orders`에 노출(시간외 등 누락), 토큰은

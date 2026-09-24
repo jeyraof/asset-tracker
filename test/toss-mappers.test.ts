@@ -61,6 +61,7 @@ describe("mapTossBalance", () => {
       totalEvalAmount: 1_100_000,
       securitiesEvalAmount: 1_100_000,
       evalPflsAmount: 100_000,
+      netAssetAmount: 1_101_234,
     });
     expect(result.holdings[0]).toMatchObject({
       market: "KRX",
@@ -88,8 +89,44 @@ describe("mapTossBalance", () => {
       purchaseAmountTotal: 500,
       totalEvalAmount: 550,
       evalPflsAmount: 50,
+      netAssetAmount: 550,
     });
     expect(result.holdings[0]?.evalPflsRate).toBeCloseTo(10, 4);
+  });
+
+  it("uses 0 for missing per-currency totals and derives net asset from cash", () => {
+    const empty: TossHoldingsOverview = {
+      totalPurchaseAmount: { krw: 1_000_000, usd: null },
+      marketValue: { amount: { krw: 1_000_000, usd: null } },
+      profitLoss: { amount: { krw: 0, usd: null } },
+      items: [],
+    };
+
+    const result = mapTossBalance(empty, {
+      market: "US",
+      currency: "USD",
+      date: "2026-09-25",
+      depositTotal: 7.62,
+    });
+
+    expect(result.summary).toMatchObject({
+      currency: "USD",
+      depositTotal: 7.62,
+      totalEvalAmount: 0,
+      securitiesEvalAmount: 0,
+      purchaseAmountTotal: 0,
+      evalPflsAmount: 0,
+      netAssetAmount: 7.62,
+    });
+  });
+
+  it("keeps net asset null when neither securities nor cash are known", () => {
+    const result = mapTossBalance(
+      { items: [] },
+      { market: "KRX", currency: "KRW", date: "2026-09-25", depositTotal: null },
+    );
+
+    expect(result.summary.netAssetAmount).toBeNull();
   });
 });
 
