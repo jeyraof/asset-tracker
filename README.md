@@ -79,7 +79,8 @@ sync 엔진을 건드리지 않고 broker/국가를 추가할 수 있다.
   `<accountNo>-us`(US, `meta.product="us"`)로 등록한다.
 - **엔드포인트**: 보유 `GET /api/v1/holdings`, 예수금(근사) `GET /api/v1/buying-power`,
   체결 `GET /api/v1/orders?status=CLOSED`(커서 페이징, `execution`), 일봉
-  `GET /api/v1/candles?interval=1d&adjusted=false`. 경로 접두사는 `/api/v1`.
+  `GET /api/v1/candles?interval=1d&adjusted=false`. **주문 내역에는 종목명이 없어**
+  체결의 종목명은 `GET /api/v1/stocks`로 보강한다(best-effort). 경로 접두사는 `/api/v1`.
 - **순자산 파생**: Toss에는 총자산 필드가 없어 `순자산 = 주식 평가금액 + 현금
   (buying-power 근사)`로 계산한다. Toss가 생략한 통화 합계(해당 시장 보유 없음)는 0으로
   저장한다.

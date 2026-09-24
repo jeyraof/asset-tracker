@@ -94,6 +94,11 @@ function baseHandler(url: string, init?: RequestInit) {
       },
     });
   }
+  if (url.includes("/api/v1/stocks")) {
+    const names: Record<string, string> = { "005930": "삼성전자", "000660": "SK하이닉스", AAPL: "애플" };
+    const symbols = (new URL(url).searchParams.get("symbols") ?? "").split(",").filter(Boolean);
+    return jsonResponse({ result: symbols.map((symbol) => ({ symbol, name: names[symbol] ?? null })) });
+  }
   if (url.includes("/api/v1/candles")) {
     return jsonResponse({
       result: {
@@ -144,7 +149,28 @@ describe("TossProvider", () => {
     const trades = await provider.getTrades(account(1), "2026-09-14", "2026-09-20");
 
     expect(trades).toHaveLength(1);
-    expect(trades[0]).toMatchObject({ externalId: "o1", market: "KRX", side: "BUY", quantity: 10 });
+    expect(trades[0]).toMatchObject({
+      externalId: "o1",
+      market: "KRX",
+      productName: "삼성전자",
+      side: "BUY",
+      quantity: 10,
+    });
+  });
+
+  it("still returns fills when the stock master fails", async () => {
+    const { provider } = createProvider((url) => {
+      if (url.includes("/oauth2/token")) return jsonResponse(TOKEN);
+      if (url.includes("/api/v1/stocks")) {
+        return jsonResponse({ error: { code: "stock-not-found", message: "nope" } }, {}, 404);
+      }
+      return baseHandler(url);
+    });
+
+    const trades = await provider.getTrades(account(1), "2026-09-14", "2026-09-20");
+
+    expect(trades).toHaveLength(1);
+    expect(trades[0]?.productName).toBeNull();
   });
 
   it("maps daily candles into quotes", async () => {

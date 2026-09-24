@@ -12,7 +12,7 @@ import type {
 import { addDays } from "../../lib/dates";
 import { describeError } from "../../lib/errors";
 import { logger } from "../../lib/logger";
-import { num } from "../../lib/parse";
+import { chunk, num, str } from "../../lib/parse";
 import { RateLimiter } from "../../lib/rateLimit";
 import { TossClient } from "./client";
 import { parseTossCredentials, type TossCredentials } from "./credentials";
@@ -26,6 +26,7 @@ import type {
   TossHoldingsOverview,
   TossOrder,
   TossPaginatedOrders,
+  TossStock,
 } from "./types";
 
 const DEFAULT_ENV = "prod";
@@ -35,6 +36,8 @@ const CALL_INTERVAL_MS = 300;
 const QUOTE_LOOKBACK_DAYS = 7;
 const MAX_ORDER_PAGES = 20;
 const ORDER_PAGE_LIMIT = 100;
+/** `GET /api/v1/stocks` accepts at most 200 symbols per call. */
+const STOCK_SYMBOL_BATCH = 200;
 
 export interface TossProviderDeps {
   environment: string;
@@ -139,7 +142,47 @@ export class TossProvider implements BrokerProvider {
       cursor = result.nextCursor;
     }
 
-    return mapTossOrders(orders, { market, currency });
+    const nameBySymbol = await this.fetchSymbolNames(orders, currency);
+    return mapTossOrders(orders, { market, currency, nameBySymbol });
+  }
+
+  /**
+   * The order history carries no product name, so look it up in the stock
+   * master. Non-fatal: on failure fills are still returned with a null name.
+   */
+  private async fetchSymbolNames(
+    orders: readonly TossOrder[],
+    currency: string,
+  ): Promise<Map<string, string>> {
+    const symbols = new Set<string>();
+    for (const order of orders) {
+      const symbol = str(order.symbol);
+      const quantity = num(order.execution?.filledQuantity) ?? 0;
+      if (symbol && quantity > 0 && (str(order.currency) ?? "") === currency) symbols.add(symbol);
+    }
+
+    const nameBySymbol = new Map<string, string>();
+    if (symbols.size === 0) return nameBySymbol;
+
+    try {
+      for (const group of chunk([...symbols], STOCK_SYMBOL_BATCH)) {
+        const stocks = await this.client.request<TossStock[]>("GET", TOSS_PATHS.stocks, {
+          params: { symbols: group.join(",") },
+        });
+        for (const stock of stocks) {
+          const symbol = str(stock.symbol);
+          const name = str(stock.name) ?? str(stock.englishName);
+          if (symbol && name) nameBySymbol.set(symbol, name);
+        }
+      }
+    } catch (error) {
+      logger.warn("failed to fetch toss stock names", {
+        currency,
+        error: describeError(error).message,
+      });
+    }
+
+    return nameBySymbol;
   }
 
   async getDailyQuotes(instruments: InstrumentRef[], date: string): Promise<QuoteFetchResult> {

@@ -31,6 +31,14 @@ export interface TossAccount {
   [key: string]: unknown;
 }
 
+/** Stock master row (`GET /api/v1/stocks`), used to name trades. */
+export interface TossStock {
+  symbol?: string;
+  name?: string;
+  englishName?: string;
+  [key: string]: unknown;
+}
+
 /** `{krw, usd?}` — a per-currency aggregate. */
 export interface TossPrice {
   krw?: TossNumeric;

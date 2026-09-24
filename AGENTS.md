@@ -204,7 +204,8 @@ fixtures, or commit messages/history. See `SECURITY.md` for the full policy.
 - Toss fills come from `GET /api/v1/orders?status=CLOSED` (order history, cursor
   paging, one account per call). Only order types orderable via Open API are
   returned (장전/장후 시간외 등은 누락), so trade history can be incomplete; it is
-  best-effort like other trades.
+  best-effort like other trades. The order history carries **no product name**, so
+  `getTrades` enriches it from `GET /api/v1/stocks` (batched, best-effort).
 - Toss tokens are **one per client** — issuing a new one revokes the previous
   (`token-revoked`). Keep the token in KV and re-issue once on a token error;
   avoid concurrent issuance. Rate limits are per client × group (e.g. `ACCOUNT`

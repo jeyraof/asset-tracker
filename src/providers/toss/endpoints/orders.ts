@@ -22,7 +22,11 @@ function isoTime(value: string | null): string | null {
 }
 
 /** Maps one filled Toss order to a normalized trade fill (null if not filled). */
-export function mapTossOrder(raw: TossOrder, market: string): TradeFill | null {
+export function mapTossOrder(
+  raw: TossOrder,
+  market: string,
+  productName: string | null = null,
+): TradeFill | null {
   const symbol = str(raw.symbol);
   const externalId = str(raw.orderId);
   const side = sideOf(str(raw.side));
@@ -36,7 +40,7 @@ export function mapTossOrder(raw: TossOrder, market: string): TradeFill | null {
     externalId,
     market,
     symbol,
-    productName: null,
+    productName,
     side,
     quantity,
     avgPrice: num(raw.execution?.averageFilledPrice),
@@ -47,14 +51,24 @@ export function mapTossOrder(raw: TossOrder, market: string): TradeFill | null {
   };
 }
 
-/** Maps a batch of orders to fills for one account, filtered by its currency. */
+/**
+ * Maps a batch of orders to fills for one account, filtered by its currency.
+ * `nameBySymbol` (from `GET /api/v1/stocks`) fills the product name, which the
+ * order history itself does not carry.
+ */
 export function mapTossOrders(
   orders: readonly TossOrder[],
-  options: { market: string; currency: string },
+  options: {
+    market: string;
+    currency: string;
+    nameBySymbol?: ReadonlyMap<string, string>;
+  },
 ): TradeFill[] {
-  const { market, currency } = options;
+  const { market, currency, nameBySymbol } = options;
   return orders
     .filter((order) => (str(order.currency) ?? currencyOf(market)) === currency)
-    .map((order) => mapTossOrder(order, market))
+    .map((order) =>
+      mapTossOrder(order, market, nameBySymbol?.get(str(order.symbol) ?? "") ?? null),
+    )
     .filter((fill): fill is TradeFill => fill !== null);
 }

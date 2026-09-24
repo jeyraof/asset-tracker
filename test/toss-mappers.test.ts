@@ -164,11 +164,17 @@ const ORDERS: TossOrder[] = [
 
 describe("mapTossOrders", () => {
   it("keeps only filled orders of the account's currency", () => {
-    const fills = mapTossOrders(ORDERS, { market: "KRX", currency: "KRW" });
+    const fills = mapTossOrders(ORDERS, {
+      market: "KRX",
+      currency: "KRW",
+      nameBySymbol: new Map([["005930", "삼성전자"]]),
+    });
+
     expect(fills).toHaveLength(1);
     expect(fills[0]).toMatchObject({
       externalId: "o1",
       market: "KRX",
+      productName: "삼성전자",
       side: "BUY",
       quantity: 10,
       avgPrice: 70000,
@@ -179,8 +185,18 @@ describe("mapTossOrders", () => {
   });
 
   it("maps US fills separately", () => {
-    const fills = mapTossOrders(ORDERS, { market: "US", currency: "USD" });
+    const fills = mapTossOrders(ORDERS, {
+      market: "US",
+      currency: "USD",
+      nameBySymbol: new Map([["AAPL", "애플"]]),
+    });
     expect(fills.map((fill) => fill.externalId)).toEqual(["o3"]);
+    expect(fills[0]?.productName).toBe("애플");
+  });
+
+  it("leaves productName null when the name is unknown", () => {
+    const fills = mapTossOrders(ORDERS, { market: "KRX", currency: "KRW" });
+    expect(fills[0]?.productName).toBeNull();
   });
 
   it("returns null for an unfilled order", () => {
