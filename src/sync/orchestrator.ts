@@ -119,138 +119,140 @@ export async function runSync(env: Env, options: SyncOptions = {}): Promise<Sync
     durationMs: 0,
   };
 
-  let accounts: AccountConfig[];
   try {
-    accounts = await repo.listActiveAccounts(env.DB, options.provider);
-  } catch (error) {
-    report.errors.push({ scope: "accounts", ...describeError(error) });
-    report.status = "failed";
-    report.durationMs = Date.now() - startedAt;
-    report.retries = takeRetries();
-    await persistReport(env, runId, report);
-    logger.error("failed to load accounts", { runId, error: errorText(error) });
-    return report;
-  }
-
-  if (options.products) {
-    const products = new Set(options.products);
-    accounts = accounts.filter((account) => products.has(productOf(account)));
-  }
-
-  const providerCache = new Map<string, BrokerProvider | null>();
-  function providerFor(id: string): BrokerProvider | null {
-    if (providerCache.has(id)) return providerCache.get(id) ?? null;
+    let accounts: AccountConfig[];
     try {
-      const provider = getProvider(id, { env });
-      providerCache.set(id, provider);
-      return provider;
+      accounts = await repo.listActiveAccounts(env.DB, options.provider);
     } catch (error) {
-      const details = describeError(error);
-      providerCache.set(id, null);
-      report.errors.push({ scope: `provider:${id}`, provider: id, ...details });
-      logger.error("provider unavailable", { runId, provider: id, message: details.message, code: details.code });
-      return null;
+      report.errors.push({ scope: "accounts", ...describeError(error) });
+      logger.error("failed to load accounts", { runId, error: errorText(error) });
+      return report;
     }
-  }
 
-  const instruments = new Map<string, { ref: InstrumentRef; providers: Set<string> }>();
+    if (options.products) {
+      const products = new Set(options.products);
+      accounts = accounts.filter((account) => products.has(productOf(account)));
+    }
 
-  for (const account of accounts) {
-    const scope = `${account.provider}:${account.externalId}`;
-    const provider = providerFor(account.provider);
-    if (!provider) continue;
-
-    try {
-      const balance = await syncBalance(env.DB, provider, account, date);
-
-      for (const holding of balance.holdings) {
-        if (!provider.supportsMarket(holding.market)) continue;
-        const key = `${holding.market}:${holding.symbol}`;
-        const entry = instruments.get(key) ?? {
-          ref: { market: holding.market, symbol: holding.symbol },
-          providers: new Set<string>(),
-        };
-        entry.providers.add(account.provider);
-        instruments.set(key, entry);
+    const providerCache = new Map<string, BrokerProvider | null>();
+    function providerFor(id: string): BrokerProvider | null {
+      if (providerCache.has(id)) return providerCache.get(id) ?? null;
+      try {
+        const provider = getProvider(id, { env });
+        providerCache.set(id, provider);
+        return provider;
+      } catch (error) {
+        const details = describeError(error);
+        providerCache.set(id, null);
+        report.errors.push({ scope: `provider:${id}`, provider: id, ...details });
+        logger.error("provider unavailable", { runId, provider: id, message: details.message, code: details.code });
+        return null;
       }
+    }
 
-      // Trade history is best-effort: some accounts reject trading APIs even
-      // when balance works (e.g. KIS APTR0058), so don't fail the snapshot.
-      // Accounts with `meta.trades = false` skip the endpoint entirely.
-      let trades = 0;
-      if (!tradesEnabled(account)) {
-        logger.info("trade sync skipped", { runId, scope });
-      } else {
-        try {
-          trades = (await syncTrades(env.DB, provider, account, date, lookbackDays)).length;
-        } catch (error) {
-          const details = describeError(error);
-          report.errors.push({
-            scope: `${scope}:trades`,
-            provider: account.provider,
-            externalId: account.externalId,
-            ...details,
-          });
-          logger.error("trade sync failed", { runId, scope, message: details.message, code: details.code, status: details.status, attempts: details.attempts });
+    const instruments = new Map<string, { ref: InstrumentRef; providers: Set<string> }>();
+
+    for (const account of accounts) {
+      const scope = `${account.provider}:${account.externalId}`;
+      const provider = providerFor(account.provider);
+      if (!provider) continue;
+
+      try {
+        const balance = await syncBalance(env.DB, provider, account, date);
+
+        for (const holding of balance.holdings) {
+          if (!provider.supportsMarket(holding.market)) continue;
+          const key = `${holding.market}:${holding.symbol}`;
+          const entry = instruments.get(key) ?? {
+            ref: { market: holding.market, symbol: holding.symbol },
+            providers: new Set<string>(),
+          };
+          entry.providers.add(account.provider);
+          instruments.set(key, entry);
         }
+
+        // Trade history is best-effort: some accounts reject trading APIs even
+        // when balance works (e.g. KIS APTR0058), so don't fail the snapshot.
+        // Accounts with `meta.trades = false` skip the endpoint entirely.
+        let trades = 0;
+        if (!tradesEnabled(account)) {
+          logger.info("trade sync skipped", { runId, scope });
+        } else {
+          try {
+            trades = (await syncTrades(env.DB, provider, account, date, lookbackDays)).length;
+          } catch (error) {
+            const details = describeError(error);
+            report.errors.push({
+              scope: `${scope}:trades`,
+              provider: account.provider,
+              externalId: account.externalId,
+              ...details,
+            });
+            logger.error("trade sync failed", { runId, scope, message: details.message, code: details.code, status: details.status, attempts: details.attempts });
+          }
+        }
+
+        report.accounts.push({
+          accountId: account.id,
+          provider: account.provider,
+          externalId: account.externalId,
+          holdings: balance.holdings.length,
+          trades,
+        });
+        logger.info("account synced", { runId, scope, holdings: balance.holdings.length, trades });
+      } catch (error) {
+        const details = describeError(error);
+        report.errors.push({
+          scope,
+          provider: account.provider,
+          externalId: account.externalId,
+          ...details,
+        });
+        logger.error("account sync failed", { runId, scope, message: details.message, code: details.code, status: details.status, attempts: details.attempts });
       }
-
-      report.accounts.push({
-        accountId: account.id,
-        provider: account.provider,
-        externalId: account.externalId,
-        holdings: balance.holdings.length,
-        trades,
-      });
-      logger.info("account synced", { runId, scope, holdings: balance.holdings.length, trades });
-    } catch (error) {
-      const details = describeError(error);
-      report.errors.push({
-        scope,
-        provider: account.provider,
-        externalId: account.externalId,
-        ...details,
-      });
-      logger.error("account sync failed", { runId, scope, message: details.message, code: details.code, status: details.status, attempts: details.attempts });
     }
+
+    const available = new Map<string, BrokerProvider>();
+    for (const [id, provider] of providerCache) {
+      if (provider) available.set(id, provider);
+    }
+
+    const assignments = resolveQuoteCandidates(
+      instruments.values(),
+      available,
+      quoteProviderPriority(),
+    );
+    await syncQuotesWithFallback(env.DB, assignments, available, report, runId, date);
+
+    return report;
+  } finally {
+    report.status =
+      report.errors.length === 0
+        ? "success"
+        : report.accounts.length + report.quotes.length > 0
+          ? "partial"
+          : "failed";
+    report.retries = takeRetries();
+    report.failedSymbols = [
+      ...new Set(report.errors.map((error) => error.symbol).filter((s): s is string => Boolean(s))),
+    ];
+    report.durationMs = Date.now() - startedAt;
+
+    try {
+      await persistReport(env, runId, report);
+    } catch (error) {
+      logger.error("failed to persist sync run", { runId, error: errorText(error) });
+    }
+    logger.info("sync finished", {
+      runId,
+      date,
+      status: report.status,
+      accounts: report.accounts.length,
+      errors: report.errors.length,
+      retries: report.retries,
+      durationMs: report.durationMs,
+    });
   }
-
-  const available = new Map<string, BrokerProvider>();
-  for (const [id, provider] of providerCache) {
-    if (provider) available.set(id, provider);
-  }
-
-  const assignments = resolveQuoteCandidates(
-    instruments.values(),
-    available,
-    quoteProviderPriority(),
-  );
-  await syncQuotesWithFallback(env.DB, assignments, available, report, runId, date);
-
-  report.status =
-    report.errors.length === 0
-      ? "success"
-      : report.accounts.length + report.quotes.length > 0
-        ? "partial"
-        : "failed";
-  report.retries = takeRetries();
-  report.failedSymbols = [
-    ...new Set(report.errors.map((error) => error.symbol).filter((s): s is string => Boolean(s))),
-  ];
-  report.durationMs = Date.now() - startedAt;
-
-  await persistReport(env, runId, report);
-  logger.info("sync finished", {
-    runId,
-    date,
-    status: report.status,
-    accounts: report.accounts.length,
-    errors: report.errors.length,
-    retries: report.retries,
-    durationMs: report.durationMs,
-  });
-
-  return report;
 }
 
 /** Persists the run status, details, and structured error rows in one batch. */

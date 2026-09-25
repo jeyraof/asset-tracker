@@ -9,12 +9,16 @@ import { logger } from "../lib/logger";
 export interface FxSyncOptions {
   /** Search-from date (YYYY-MM-DD, KST). Defaults to today in KST. */
   date?: string;
-  /** Restrict to a single FX source id, e.g. "koreaexim". */
+  /** Run origin: "cron" | "http". Defaults to "cron". */
   source?: string;
+  /** Restrict to a single FX source id, e.g. "koreaexim". */
+  fxSource?: string;
   /** Base currency. Defaults to "USD". */
   base?: string;
   /** Quote currency. Defaults to "KRW". */
   quote?: string;
+  /** Explicit run id (defaults to a fresh UUID). */
+  runId?: string;
 }
 
 export interface FxRateResult {
@@ -36,34 +40,50 @@ export interface FxSyncError {
 }
 
 export interface FxSyncReport {
+  runId: string;
   /** The date the search started from (YYYY-MM-DD, KST). */
   date: string;
   base: string;
   quote: string;
+  status: "success" | "partial" | "failed";
   rates: FxRateResult[];
   errors: FxSyncError[];
   durationMs: number;
 }
 
 /**
- * Fetches and stores the reference FX rate. This is a standalone task: it needs
- * no holdings, runs on its own cron (and via `POST /sync/fx`), and iterates the
- * market `FxSource`s in `src/fx/`. Sources that cannot be constructed (e.g. a
- * missing API key) are only an error when explicitly requested.
+ * Fetches and stores the reference FX rate. This is a standalone task (recorded
+ * in `sync_runs` with `task='fx'`): it needs no holdings, runs on its own cron
+ * (and via `POST /sync/fx`), and iterates the market `FxSource`s in `src/fx/`.
  */
 export async function syncFxRates(env: Env, options: FxSyncOptions = {}): Promise<FxSyncReport> {
   const startedAt = Date.now();
   const date = options.date ?? kstDate();
+  const source = options.source ?? "cron";
+  const runId = options.runId ?? crypto.randomUUID();
   const base = options.base ?? "USD";
   const quote = options.quote ?? "KRW";
 
-  const report: FxSyncReport = { date, base, quote, rates: [], errors: [], durationMs: 0 };
-  const candidateIds = options.source ? [options.source] : listKnownFxSources();
+  const candidateIds = options.fxSource ? [options.fxSource] : listKnownFxSources();
+  const provider = options.fxSource ?? listKnownFxSources()[0] ?? null;
+
+  await repo.startSyncRun(env.DB, { runId, provider, source, task: "fx" });
+
+  const report: FxSyncReport = {
+    runId,
+    date,
+    base,
+    quote,
+    status: "success",
+    rates: [],
+    errors: [],
+    durationMs: 0,
+  };
 
   for (const id of candidateIds) {
-    let source: FxSource;
+    let fxSource: FxSource;
     try {
-      source = getFxSource(id, env);
+      fxSource = getFxSource(id, env);
     } catch (error) {
       const details = describeError(error);
       report.errors.push({ scope: `source:${id}`, ...details });
@@ -72,7 +92,7 @@ export async function syncFxRates(env: Env, options: FxSyncOptions = {}): Promis
     }
 
     try {
-      const rate = await source.getFxRate(base, quote, date);
+      const rate = await fxSource.getFxRate(base, quote, date);
       if (!rate) {
         logger.info("fx rate unavailable", { source: id, base, quote, date });
         report.rates.push({ source: id, base, quote, rate: null, date: null });
@@ -105,5 +125,37 @@ export async function syncFxRates(env: Env, options: FxSyncOptions = {}): Promis
   }
 
   report.durationMs = Date.now() - startedAt;
+  report.status =
+    report.errors.length === 0
+      ? "success"
+      : report.rates.some((rate) => rate.rate !== null)
+        ? "partial"
+        : "failed";
+
+  await repo.finishSyncRun(
+    env.DB,
+    runId,
+    report.status,
+    report,
+    report.errors.map((error) => ({
+      runId,
+      scope: error.scope,
+      message: error.message,
+      provider: error.scope.includes(":") ? error.scope.slice(error.scope.indexOf(":") + 1) : null,
+      status: error.status ?? null,
+      code: error.code ?? null,
+      attempts: error.attempts ?? null,
+      path: error.path ?? null,
+    })),
+  );
+  logger.info("fx sync finished", {
+    runId,
+    date,
+    status: report.status,
+    rates: report.rates.length,
+    errors: report.errors.length,
+    durationMs: report.durationMs,
+  });
+
   return report;
 }

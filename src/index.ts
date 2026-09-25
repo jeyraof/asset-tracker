@@ -110,8 +110,8 @@ async function handleFxSync(request: Request, url: URL, env: Env): Promise<Respo
   const base = pickString(body["base"]) ?? pickString(url.searchParams.get("base"));
   const quote = pickString(body["quote"]) ?? pickString(url.searchParams.get("quote"));
 
-  const report = await syncFxRates(env, { date, source: fxSource, base, quote });
-  return json(report, report.errors.length > 0 ? 502 : 200);
+  const report = await syncFxRates(env, { date, fxSource, base, quote, source: "http" });
+  return json(report, report.status === "failed" ? 502 : 200);
 }
 
 export default {
@@ -122,7 +122,7 @@ export default {
     // the holdings snapshot.
     if (controller.cron === FX_CRON) {
       ctx.waitUntil(
-        syncFxRates(env).catch((error: unknown) => {
+        syncFxRates(env, { source: "cron" }).catch((error: unknown) => {
           logger.error("scheduled fx sync failed", {
             date: kstDate(scheduledAt),
             error: error instanceof Error ? error.message : String(error),
@@ -177,6 +177,8 @@ export default {
           sync: last
             ? {
                 runId: last.run_id,
+                task: last.task,
+                provider: last.provider,
                 status: last.status,
                 startedAt: last.started_at,
                 finishedAt: last.finished_at,

@@ -358,15 +358,17 @@ export interface StartSyncRunInput {
   runId: string;
   provider: string | null;
   source: string;
+  /** "sync" (broker) or "fx"; defaults to "sync". */
+  task?: string;
 }
 
 export async function startSyncRun(db: D1Database, input: StartSyncRunInput): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO sync_runs (run_id, provider, source, status)
-       VALUES (?, ?, ?, 'running')`,
+      `INSERT INTO sync_runs (run_id, provider, source, task, status)
+       VALUES (?, ?, ?, ?, 'running')`,
     )
-    .bind(input.runId, input.provider, input.source)
+    .bind(input.runId, input.provider, input.source, input.task ?? "sync")
     .run();
 }
 
@@ -440,6 +442,7 @@ export interface SyncRunRow {
   run_id: string;
   provider: string | null;
   source: string;
+  task: string;
   status: string;
   started_at: string;
   finished_at: string | null;
@@ -449,7 +452,7 @@ export interface SyncRunRow {
 export async function getLatestSyncRun(db: D1Database): Promise<SyncRunRow | null> {
   const row = await db
     .prepare(
-      `SELECT run_id, provider, source, status, started_at, finished_at, details_json
+      `SELECT run_id, provider, source, task, status, started_at, finished_at, details_json
          FROM sync_runs ORDER BY id DESC LIMIT 1`,
     )
     .first<SyncRunRow>();
@@ -459,7 +462,7 @@ export async function getLatestSyncRun(db: D1Database): Promise<SyncRunRow | nul
 export async function getSyncRun(db: D1Database, runId: string): Promise<SyncRunRow | null> {
   const row = await db
     .prepare(
-      `SELECT run_id, provider, source, status, started_at, finished_at, details_json
+      `SELECT run_id, provider, source, task, status, started_at, finished_at, details_json
          FROM sync_runs WHERE run_id = ?`,
     )
     .bind(runId)

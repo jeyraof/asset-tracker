@@ -3,6 +3,17 @@
 `asset-tracker`의 주요 변경 이력입니다. **최신 우선**. 과거 개발 메모를 그대로
 보존합니다(당시 기준의 수치 포함).
 
+## 2026-09-25 — 통합 런 이력 (FX 포함)
+
+- `sync_runs.task` 추가(마이그레이션 `0007`): `'sync'`(증권사) / `'fx'`. `provider`
+  컬럼은 task에 따라 broker id 또는 fx 소스 id를 담는다.
+- FX 태스크(`syncFxRates`)가 이제 `sync_runs`에 런을 기록(`task='fx'`,
+  `provider='koreaexim'`, status/`details_json`)하고, 오류는 `sync_errors`에 적재한다.
+  → `/health`·`/runs`가 증권사와 FX를 포함한 전체 이력을 반영.
+- `runSync`를 try/finally로 감싸 예기치 않은 예외 시에도 런을 종료(`status='failed'`,
+  `finished_at` 보장)하도록 수정.
+- `pnpm test` 135 passed, `pnpm typecheck` 통과.
+
 ## 2026-09-25 — 토스증권 provider
 
 - `src/providers/toss/` 추가, `registry`에 등록(quote priority `kis → kiwoom → toss`).

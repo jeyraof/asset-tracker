@@ -182,7 +182,13 @@ fixtures, or commit messages/history. See `SECURITY.md` for the full policy.
   days, so the FX cron runs KST 12:00 (UTC `0 3 * * 2-6`) and the source searches
   back up to 7 days when a date has no data. The authkey goes in the query string
   (`KOREAEXIM_API_KEY`); never log the full URL. `result` codes: 2=data, 3=auth,
-  4=daily quota. Only USD→KRW is mapped.
+  4=daily quota. Only USD→KRW is mapped. FX runs are recorded in `sync_runs` with
+  `task='fx'`, `provider='koreaexim'` (errors in `sync_errors`) so the run history
+  is unified across brokers and FX.
+- `sync_runs.task` distinguishes run kinds: `'sync'` (broker) or `'fx'`. The
+  `provider` column holds a broker id when `task='sync'` and an FX source id when
+  `task='fx'`. `runSync` finishes the run in a `finally` (status `failed` on an
+  unexpected error, `finished_at` always set); `syncFxRates` records its own run.
 - Kiwoom REST does **not** expose US fractional (소수점) holdings yet. `ust21070`/  `ust21170` return whole shares only (`poss_qty` is an integer); fractional
   quantities appear only in trades (`ust21100` `deal_qty`, kind `소수점매매`).
   The fractional *value* is folded into the aggregate endpoints (`ust21120`/

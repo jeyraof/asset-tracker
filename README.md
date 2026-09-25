@@ -98,7 +98,8 @@ sync 엔진을 건드리지 않고 broker/국가를 추가할 수 있다.
 
 - **별개 태스크**: `src/sync/fx.ts`(`syncFxRates`)가 조회·보관을 담당한다. 자체 크론
   **KST 월–금 12:00**(UTC `0 3 * * 2-6`)으로 돌고 `POST /sync/fx`로 수동 실행할 수 있다.
-  보유와 무관하며, 실패해도 스냅샷에 영향을 주지 않는다.
+  보유와 무관하며, 실패해도 스냅샷에 영향을 주지 않는다. FX 런도 **통합 런 이력**에
+  기록된다(`sync_runs` `task='fx'`, `provider='koreaexim'`; 오류는 `sync_errors`).
 - **출처**: 한국수출입은행 Open API(`src/fx/koreaexim.ts`)의 **매매기준율**
   (`deal_bas_r`, `data=AP01`, `oapi.koreaexim.go.kr`). 고시는 영업일 오전 11시
   전후라 KST 12:00에 수집하며, 영업일 11시 이전·주말·공휴일은 데이터가 없어 **직전
@@ -175,7 +176,7 @@ sync 엔진은 `BrokerProvider` 인터페이스만 알기 때문에, 새 broker�
 | `price_daily` | market + symbol + date | OHLCV |
 | `trades` | account + date + external_id + side | 매수/매도 체결 |
 | `fx_rates` | base + quote + date | 시장 기준환율(USD/KRW), source-agnostic |
-| `sync_runs` | run | 실행 이력 / 상태 |
+| `sync_runs` | run | 통합 실행 이력 (`task`=`sync`\|`fx`; `provider`=broker id 또는 fx 소스 id) |
 | `sync_errors` | run + scope | 런별 구조화 오류(status/attempts/symbol 등) |
 
 ## Cloudflare 리소스
