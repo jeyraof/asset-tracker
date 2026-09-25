@@ -156,6 +156,7 @@ function toAccount(
     currency,
     name: product === "us" ? `Kiwoom ${acctNo} US` : `Kiwoom ${acctNo}`,
     active: true,
+    accountNo: acctNo,
     meta,
   };
 }
@@ -169,10 +170,10 @@ function seedSql(accounts: AccountConfig[]): string {
   for (const account of accounts) {
     const meta = sqlString(JSON.stringify(account.meta));
     lines.push(
-      `INSERT INTO accounts (provider, env, external_id, country, currency, name, active, meta_json)`,
-      `VALUES ('${account.provider}', '${account.env}', '${sqlString(account.externalId)}', '${sqlString(account.country)}', '${sqlString(account.currency)}', '${sqlString(account.name ?? account.externalId)}', 1, '${meta}')`,
+      `INSERT INTO accounts (provider, env, external_id, country, currency, name, account_no, active, meta_json)`,
+      `VALUES ('${account.provider}', '${account.env}', '${sqlString(account.externalId)}', '${sqlString(account.country)}', '${sqlString(account.currency)}', '${sqlString(account.name ?? account.externalId)}', '${sqlString(account.accountNo ?? "")}', 1, '${meta}')`,
       `ON CONFLICT (provider, env, external_id) DO UPDATE SET`,
-      `  name = excluded.name, active = excluded.active, country = excluded.country, currency = excluded.currency, meta_json = excluded.meta_json, updated_at = datetime('now');`,
+      `  name = excluded.name, account_no = excluded.account_no, active = excluded.active, country = excluded.country, currency = excluded.currency, meta_json = excluded.meta_json, updated_at = datetime('now');`,
       "",
     );
   }

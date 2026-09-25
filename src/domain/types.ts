@@ -32,6 +32,11 @@ export interface AccountConfig extends ProviderAccount {
    * when empty/absent, callers fall back to `name`, then `externalId`.
    */
   alias?: string | null;
+  /**
+   * The broker's real account number (PII), e.g. KIS `"12345678-01"` or a
+   * 10-digit Kiwoom/Toss account number. Never committed or logged.
+   */
+  accountNo?: string | null;
 }
 
 export interface BalanceSummary {

@@ -168,7 +168,7 @@ sync 엔진은 `BrokerProvider` 인터페이스만 알기 때문에, 새 broker�
 
 | 테이블 | 그레인 | 비고 |
 |---|---|---|
-| `accounts` | provider + env + external_id | 런타임 계좌 레지스트리 |
+| `accounts` | provider + env + external_id | 런타임 계좌 레지스트리 (`account_no`=실제 계좌번호, PII) |
 | `instruments` | market + symbol | 안정적인 종목 기준 |
 | `account_snapshots` | account + date | 현금/예수금 + 평가 합계 |
 | `holdings` | account + date + market + symbol | 일별 포지션 |
@@ -253,7 +253,9 @@ Worker**에만 적용되고, 로컬(`wrangler dev`)은 `.dev.vars`를 읽는다.
 
 계좌는 D1 `accounts` 행으로 등록하고, 시드는 `pnpm db:seed:remote`로 적용한다. `alias`는
 사용자 지정 표시명이며(`resolveAccountName`: alias → name → externalId), 툴/시드는
-`alias`를 쓰지 않으므로 수동 지정값이 재등록에도 유지된다.
+`alias`를 쓰지 않으므로 수동 지정값이 재등록에도 유지된다. `account_no`는 실제
+계좌번호(PII)로, 등록 스크립트가 생성 시드에 기록하고 `external_id`/`meta`에서 파생해
+채운다(마이그레이션 `0006`).
 
 - **KIS**: "계좌 목록" API가 없다. KIS Developers 포털 신청현황에서 `CANO`(8자리)와
   `ACNT_PRDT_CD`(보통 `01`)를 확인한다. `pnpm kis:accounts`가 계좌별 자체 키로 검증하고

@@ -56,6 +56,10 @@ Always run `pnpm test` and `pnpm typecheck` after changes.
 - `accounts.alias` is a user-set display name; `resolveAccountName` (in
   `src/lib/accounts.ts`) falls back to `name`, then `externalId`. Tooling/seeds
   never write `alias`, so manual values survive re-registration.
+- `accounts.account_no` is the broker's **real account number** (PII): KIS
+  `CANO-PRDT`, Kiwoom/Toss 10-digit account number. Tooling/seeds write it; the
+  column is populated by deriving from `external_id`/`meta` (migration `0006`).
+  Never commit or log it, and keep real values out of fixtures/docs.
 - Re-running a sync must be idempotent: use `ON CONFLICT DO UPDATE`. Holdings for
   a day are replaced (delete + insert in one `db.batch`) to drop sold positions.
 - Accounts opt out of trade sync with `meta.trades = false` (checked by
