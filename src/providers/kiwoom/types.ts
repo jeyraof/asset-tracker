@@ -180,6 +180,18 @@ export interface KiwoomUsBalanceResponse extends KiwoomEnvelope {
   result_list?: KiwoomUsHoldingRaw[];
 }
 
+/** US deposit detail (ust21160): USD deposit at D0/D1/D2 (+ KRW deposit). */
+export interface KiwoomUsDepositDetailResponse extends KiwoomEnvelope {
+  won_entr?: string;
+  won_dfr_amt?: string;
+  won_etc_loana?: string;
+  usd_exch_rate?: string;
+  d0_usd_fx_entr?: string;
+  d1_usd_fx_entr?: string;
+  d2_usd_fx_entr?: string;
+  [key: string]: unknown;
+}
+
 export interface KiwoomUsTradeRaw {
   deal_dt?: string;
   deal_kind_nm?: string;

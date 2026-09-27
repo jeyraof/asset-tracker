@@ -59,6 +59,7 @@ import type {
   KiwoomTradeHistoryResponse,
   KiwoomUsBalanceResponse,
   KiwoomUsDailyChartResponse,
+  KiwoomUsDepositDetailResponse,
   KiwoomUsExchangeResponse,
   KiwoomUsHoldingRaw,
   KiwoomUsTradeHistoryResponse,
@@ -218,7 +219,8 @@ export class KiwoomProvider implements BrokerProvider {
    * US balance (ust21070) re-valued at the regular-session close. The US market
    * is closed when this runs (KST morning), but after-hours trade may still be
    * printing, so each holding is pinned to the most recent regular-session close
-   * from usa06012 (at or before `date`, covering non-trading days).
+   * from usa06012 (at or before `date`, covering non-trading days). ust21070
+   * carries no deposit, so the USD deposit (D0/D1/D2) comes from ust21160.
    */
   private async usBalance(client: KiwoomClient, date: string): Promise<BalanceResult> {
     const holdings: KiwoomUsHoldingRaw[] = [];
@@ -247,7 +249,23 @@ export class KiwoomProvider implements BrokerProvider {
       if (close !== null) closeBySymbol.set(symbol, close);
     }
 
-    return mapUsBalance(body, date, (symbol) => closeBySymbol.get(symbol) ?? null);
+    // Best-effort: a deposit failure must not drop the holdings snapshot.
+    let deposit: KiwoomUsDepositDetailResponse | null = null;
+    try {
+      deposit = (
+        await client.request<KiwoomUsDepositDetailResponse>(
+          KIWOOM_API_IDS.usDepositDetail,
+          KIWOOM_PATHS.usAccount,
+          {},
+        )
+      ).body;
+    } catch (error) {
+      logger.warn("failed to fetch kiwoom US deposit", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return mapUsBalance(body, date, (symbol) => closeBySymbol.get(symbol) ?? null, deposit);
   }
 
   /** Resolves the exchange (ND/NY/NA) required by the US chart/quotes APIs. */

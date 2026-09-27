@@ -170,14 +170,18 @@ fixtures, or commit messages/history. See `SECURITY.md` for the full policy.
   and `market="KRX-GOLD"`; `kiwoom:accounts` detects them when `kt00018` fails
   with `400114`.
 - Kiwoom US (`meta.product="us"`) uses `/api/us/*` (`ust21070` balance,
-  `ust21100` trades, `usa10098` exchange, `usa06012` daily chart) with a
-  `result_list` envelope. Accounts are extra rows (`external_id="<acctNo>-us"`,
+  `ust21100` trades, `ust21160` deposit detail, `usa10098` exchange, `usa06012`
+  daily chart) with a `result_list` envelope. Accounts are extra rows (`external_id="<acctNo>-us"`,
   `country="US"`, `currency="USD"`, `market="US"`). Neither the balance nor the
   trades carry an exchange, so quotes resolve `stex_tp` (`ND`/`NY`/`NA`) via
   `usa10098` first (a `ND` guess fails with `1903` for NYSE/AMEX names). The US
   run fires at KST 07:00, which is still after-hours, so holdings are re-valued
   at the most recent regular-session close at or before `date` (candle `dt <= date`;
-  non-trading days reuse the last close) instead of the broker's `now_pric`. Never
+  non-trading days reuse the last close) instead of the broker's `now_pric`.
+  `ust21070` has no cash field, so the USD deposit comes from `ust21160`
+  (`d0/d1/d2_usd_fx_entr` → `deposit_total`/`next_day_settlement`/`settlement_deposit`),
+  fetched best-effort (a failure must not drop the snapshot); `netAssetAmount` =
+  securities + D+2 cash. Never
   run US tickers through `stripSymbol`: 7-char tickers starting with `A`/`J`/`Q`
   would be truncated.
 - Verified live (2026-09-20): `ust21100` requires `krw_repl_skip_yn` (send `"N"`;

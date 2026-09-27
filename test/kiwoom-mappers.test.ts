@@ -331,6 +331,21 @@ describe("US mappers", () => {
     expect(result.holdings[0]?.evalPflsAmount).toBeCloseTo(106650 - 111453.3212, 3);
     expect(result.summary.totalEvalAmount).toBeCloseTo(106650, 5);
     expect(result.summary.purchaseAmountTotal).toBeCloseTo(111453.3212, 3);
+    expect(result.summary.netAssetAmount).toBeCloseTo(106650, 5);
+  });
+
+  it("maps the USD deposit (ust21160) into D0/D1/D2 and nets it into the asset", () => {
+    const result = mapUsBalance(
+      balanceBody,
+      "2026-09-20",
+      (symbol) => (symbol === "AAPL" ? 270 : null),
+      { d0_usd_fx_entr: "74.290", d1_usd_fx_entr: "74.290", d2_usd_fx_entr: "74.290" },
+    );
+
+    expect(result.summary.depositTotal).toBeCloseTo(74.29, 5);
+    expect(result.summary.nextDaySettlement).toBeCloseTo(74.29, 5);
+    expect(result.summary.settlementDeposit).toBeCloseTo(74.29, 5);
+    expect(result.summary.netAssetAmount).toBeCloseTo(106650 + 74.29, 5);
   });
 
   it("falls back to the broker price when no candle exists (holiday)", () => {

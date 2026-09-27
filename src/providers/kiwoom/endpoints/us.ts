@@ -12,6 +12,7 @@ import type {
   KiwoomUsBalanceResponse,
   KiwoomUsCandleRaw,
   KiwoomUsDailyChartResponse,
+  KiwoomUsDepositDetailResponse,
   KiwoomUsHoldingRaw,
   KiwoomUsTradeHistoryResponse,
   KiwoomUsTradeRaw,
@@ -81,34 +82,42 @@ function sumOrNull(values: readonly (number | null)[]): number | null {
 function mapUsSummary(
   body: KiwoomUsBalanceResponse,
   holdings: readonly HoldingSnapshot[],
+  deposit: KiwoomUsDepositDetailResponse | null,
 ): BalanceSummary {
+  const depositTotal = deposit ? num(deposit.d0_usd_fx_entr) : null;
+  const nextDaySettlement = deposit ? num(deposit.d1_usd_fx_entr) : null;
+  const settlementDeposit = deposit ? num(deposit.d2_usd_fx_entr) : null;
+  const raw = { balance: body, deposit: deposit ?? null };
+
   if (holdings.length === 0) {
+    const totalEvalAmount = num(body.tot_evlt_amt);
     return {
       currency: USD,
-      depositTotal: null,
-      nextDaySettlement: null,
-      settlementDeposit: null,
-      totalEvalAmount: num(body.tot_evlt_amt),
-      securitiesEvalAmount: num(body.tot_evlt_amt),
+      depositTotal,
+      nextDaySettlement,
+      settlementDeposit,
+      totalEvalAmount,
+      securitiesEvalAmount: totalEvalAmount,
       purchaseAmountTotal: num(body.tot_prch_amt),
       evalPflsAmount: num(body.tot_pl_amt),
-      netAssetAmount: num(body.tot_evlt_amt),
-      raw: body,
+      // Net asset = securities + D+2 cash (settlement-consistent; ust21070 has no total).
+      netAssetAmount: sumOrNull([totalEvalAmount, settlementDeposit]),
+      raw,
     };
   }
 
   const totalEvalAmount = sumOrNull(holdings.map((holding) => holding.evalAmount));
   return {
     currency: USD,
-    depositTotal: null,
-    nextDaySettlement: null,
-    settlementDeposit: null,
+    depositTotal,
+    nextDaySettlement,
+    settlementDeposit,
     totalEvalAmount,
     securitiesEvalAmount: totalEvalAmount,
     purchaseAmountTotal: sumOrNull(holdings.map((holding) => holding.purchaseAmount)),
     evalPflsAmount: sumOrNull(holdings.map((holding) => holding.evalPflsAmount)),
-    netAssetAmount: totalEvalAmount,
-    raw: body,
+    netAssetAmount: sumOrNull([totalEvalAmount, settlementDeposit]),
+    raw,
   };
 }
 
@@ -116,19 +125,20 @@ function mapUsSummary(
  * Maps a US ledger balance (ust21070) to the normalized model. When `closeFor`
  * is provided, each holding is re-valued at the most recent regular-session
  * close at or before `date` (falling back to the broker's `now_pric` when no
- * candle exists).
+ * candle exists). `deposit` (ust21160) supplies the USD D0/D1/D2 deposit.
  */
 export function mapUsBalance(
   body: KiwoomUsBalanceResponse,
   date: string,
   closeFor?: (symbol: string) => number | null,
+  deposit?: KiwoomUsDepositDetailResponse | null,
 ): BalanceResult {
   const holdings = (body.result_list ?? [])
     .map(mapUsHolding)
     .filter((holding): holding is HoldingSnapshot => holding !== null)
     .map((holding) => applyRegularClose(holding, closeFor ? closeFor(holding.symbol) : null));
 
-  return { date, summary: mapUsSummary(body, holdings), holdings };
+  return { date, summary: mapUsSummary(body, holdings, deposit ?? null), holdings };
 }
 
 function mapUsTradeRow(raw: KiwoomUsTradeRaw, market: string): TradeFill | null {

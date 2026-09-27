@@ -57,7 +57,11 @@ sync 엔진을 건드리지 않고 broker/국가를 추가할 수 있다.
   `market="KRX-GOLD"`, `meta.product="gold"`.
 - **미국주식**: 별도 계좌행(`<acctNo>-us`, `country=US`, `currency=USD`,
   `meta.product="us"`). 엔드포인트 `ust21070`(원장잔고), `ust21100`(거래내역),
-  `usa06012`(일봉), `usa10098`(거래소 ND/NY/NA). 경로 `/api/us/*`, 목록 키 `result_list`.
+  `ust21160`(예수금 상세), `usa06012`(일봉), `usa10098`(거래소 ND/NY/NA). 경로
+  `/api/us/*`, 목록 키 `result_list`.
+  - `ust21070`에는 예수금이 없어, USD 예수금은 `ust21160`의 `d0/d1/d2_usd_fx_entr`를
+    `deposit_total`(D0)/`next_day_settlement`(D1)/`settlement_deposit`(D2)로 매핑한다
+    (best-effort — 실패해도 보유 스냅샷은 유지). `netAssetAmount = 증권평가 + D+2 현금`.
   - KST 07:00 실행은 미국 정규장 이후지만 시간외 구간이라, 보유평가를 `usa06012` 정규장
     종가(캔들 `dt <= date` 중 최근)로 재계산한다. 비거래일(주말·휴장일)은 그 날짜 캔들이
     없어 직전 정규장 종가로 고정된다.

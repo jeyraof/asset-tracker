@@ -24,6 +24,7 @@ export const KIWOOM_API_IDS = {
   goldTradeHistory: "kt50032",
   goldDailyChart: "ka50081",
   usBalance: "ust21070",
+  usDepositDetail: "ust21160",
   usTradeHistory: "ust21100",
   usExchange: "usa10098",
   usDailyChart: "usa06012",

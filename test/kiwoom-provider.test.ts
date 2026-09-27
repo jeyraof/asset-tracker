@@ -202,6 +202,16 @@ function createProvider(relaySecret?: string) {
         ],
       });
     }
+    if (apiId === "ust21160") {
+      return jsonResponse({
+        return_code: 0,
+        won_entr: "000000000000000",
+        usd_exch_rate: "1,367.75",
+        d0_usd_fx_entr: "74.290",
+        d1_usd_fx_entr: "74.290",
+        d2_usd_fx_entr: "74.290",
+      });
+    }
     if (apiId === "ust21100") {
       return jsonResponse({
         return_code: 0,
@@ -375,9 +385,14 @@ describe("KiwoomProvider", () => {
     });
     expect(result.holdings[0]?.evalAmount).toBeCloseTo(395 * 270, 5);
     expect(result.summary.totalEvalAmount).toBeCloseTo(106650, 5);
+    expect(result.summary.depositTotal).toBeCloseTo(74.29, 5);
+    expect(result.summary.nextDaySettlement).toBeCloseTo(74.29, 5);
+    expect(result.summary.settlementDeposit).toBeCloseTo(74.29, 5);
+    expect(result.summary.netAssetAmount).toBeCloseTo(106650 + 74.29, 5);
 
     const ids = apiCalls(mock).map((call) => (call.init?.headers as Record<string, string>)["api-id"]);
     expect(ids).toContain("ust21070");
+    expect(ids).toContain("ust21160");
     expect(ids).toContain("usa10098");
     expect(ids).toContain("usa06012");
     expect(ids).not.toContain("kt00018");

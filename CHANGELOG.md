@@ -3,6 +3,15 @@
 `asset-tracker`의 주요 변경 이력입니다. **최신 우선**. 과거 개발 메모를 그대로
 보존합니다(당시 기준의 수치 포함).
 
+## 2026-09-27 — 키움 US 예수금(`ust21160`) 연동
+
+- 키움 US 잔고(`ust21070`)에는 예수금 필드가 없어 US 행의 `deposit_total`이 `null`이었다.
+  전용 TR `ust21160`(미국주식 예수금 상세)을 추가해 `d0/d1/d2_usd_fx_entr`를
+  `deposit_total`(D0)/`next_day_settlement`(D1)/`settlement_deposit`(D2)로 매핑한다.
+  호출은 **best-effort**(실패해도 보유 스냅샷 유지), `netAssetAmount = 증권평가 + D+2 현금`.
+- 기존 US 스냅샷의 `raw_json`에는 예수금이 없어 소급 백필 불가 → 다음 US 런부터 채워진다.
+- `pnpm test` 142 passed, `pnpm typecheck` 통과.
+
 ## 2026-09-27 — D+2 예수금(`settlement_deposit`) 추가
 
 - `account_snapshots`에 `settlement_deposit`(D+2 결제 반영 예수금) 컬럼 추가(마이그레이션
