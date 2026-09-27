@@ -11,11 +11,12 @@
     "traces": { "enabled": true, "head_sampling_rate": 1 }
   },
   "triggers": {
-    // KRX run: KST Mon-Fri 20:30 = UTC Mon-Fri 11:30.
-    // US run: KST Tue-Sat 07:00 (after the US regular close) = UTC Mon-Fri 22:00.
-    // FX: KST Mon-Fri 12:00 (after Korea Eximbank publishes ~11:00) = UTC Mon-Fri 03:00.
-    // Cloudflare weekdays: 1=Sunday ... 7=Saturday, so Mon-Fri is 2-6.
-    "crons": ["30 11 * * 2-6", "0 22 * * 2-6", "0 3 * * 2-6"]
+    // All three crons run every day (weekends included): snapshots are stored
+    // daily, while quotes/FX keep only business days and non-trading days reuse
+    // the last close. KRX: UTC 11:30 = KST 20:30. US: UTC 22:00 = KST 07:00 next
+    // day (after the US close). FX: UTC 03:00 = KST 12:00 (after Korea Eximbank
+    // publishes ~11:00).
+    "crons": ["30 11 * * *", "0 22 * * *", "0 3 * * *"]
   },
   "vars": {
     "KIS_ENV": "prod",

@@ -57,6 +57,7 @@ describe("mapTossBalance", () => {
     expect(result.summary).toMatchObject({
       currency: "KRW",
       depositTotal: 1234,
+      settlementDeposit: null,
       purchaseAmountTotal: 1_000_000,
       totalEvalAmount: 1_100_000,
       securitiesEvalAmount: 1_100_000,
@@ -86,6 +87,7 @@ describe("mapTossBalance", () => {
     expect(result.summary).toMatchObject({
       currency: "USD",
       depositTotal: null,
+      settlementDeposit: null,
       purchaseAmountTotal: 500,
       totalEvalAmount: 550,
       evalPflsAmount: 50,
@@ -112,6 +114,7 @@ describe("mapTossBalance", () => {
     expect(result.summary).toMatchObject({
       currency: "USD",
       depositTotal: 7.62,
+      settlementDeposit: null,
       totalEvalAmount: 0,
       securitiesEvalAmount: 0,
       purchaseAmountTotal: 0,

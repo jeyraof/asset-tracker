@@ -4,20 +4,23 @@ import { resolveAccountName } from "./lib/accounts";
 import { logger } from "./lib/logger";
 import { runSync } from "./sync/orchestrator";
 import { syncFxRates } from "./sync/fx";
-import { getLatestSyncRun, getSyncRun, listActiveAccounts, listRecentRuns, listSyncErrors } from "./db/repo";
+import { getLatestSyncRun, getRunHealthByTask, getSyncRun, listActiveAccounts, listRecentRuns, listSyncErrors } from "./db/repo";
 import { listKnownProviders } from "./providers/registry";
 
 const DEFAULT_LOOKBACK_DAYS = 7;
 const MAX_LOOKBACK_DAYS = 90;
+/** A task is healthy if it succeeded within this window (runs are <= ~10.5h apart). */
+const HEALTH_SUCCESS_WINDOW_MS = 36 * 60 * 60 * 1000;
 
 /**
- * US accounts run separately after the US regular session closes: UTC Mon-Fri
- * 22:00 = KST Tue-Sat 07:00. The KRX run stays at UTC Mon-Fri 11:30 (KST 20:30).
- * FX runs on its own at UTC Mon-Fri 03:00 (KST 12:00), after Korea Eximbank
- * publishes the day's 매매기준율 (~11:00 KST).
+ * Every cron runs daily. US accounts run after the US regular session closes
+ * (UTC 22:00 = KST 07:00 next day); the KRX run is UTC 11:30 (KST 20:30); FX
+ * runs at UTC 03:00 (KST 12:00), after Korea Eximbank publishes the day's
+ * 매매기준율 (~11:00 KST). Non-trading days are snapshotted too, so US balances
+ * fall back to the last regular-session close.
  */
-const US_CRON = "0 22 * * 2-6";
-const FX_CRON = "0 3 * * 2-6";
+const US_CRON = "0 22 * * *";
+const FX_CRON = "0 3 * * *";
 const KRX_PRODUCTS = ["stock", "gold"] as const;
 const US_PRODUCTS = ["us"] as const;
 
@@ -52,6 +55,11 @@ function pickProducts(value: unknown): string[] | undefined {
 interface RunDetails {
   errors?: unknown[];
   failedSymbols?: string[];
+}
+
+/** Parses a SQLite `datetime('now')` value (UTC, "YYYY-MM-DD HH:MM:SS") to ms. */
+function sqliteUtcMs(value: string): number {
+  return Date.parse(`${value.replace(" ", "T")}Z`);
 }
 
 function parseRunDetails(json: string | null): RunDetails | null {
@@ -161,12 +169,33 @@ export default {
       });
     }
 
-    // Health reflects the last sync run: non-2xx when it was not successful, so
-    // an external uptime monitor can alert without a bespoke webhook.
+    // Health is judged per task: healthy when each task's latest run succeeded,
+    // or a success happened within HEALTH_SUCCESS_WINDOW_MS. This tolerates an
+    // isolated non-success run (e.g. a non-trading day) while a sustained
+    // failure still returns non-2xx for an external uptime monitor.
     if (request.method === "GET" && url.pathname === "/health") {
-      const last = await getLatestSyncRun(env.DB).catch(() => null);
+      const [last, taskHealth] = await Promise.all([
+        getLatestSyncRun(env.DB).catch(() => null),
+        getRunHealthByTask(env.DB).catch(() => []),
+      ]);
       const details = parseRunDetails(last?.details_json ?? null);
-      const ok = !last || last.status === "success";
+
+      const now = Date.now();
+      const ok =
+        taskHealth.length === 0 ||
+        taskHealth.every(
+          (task) =>
+            task.latest_status === "success" ||
+            (task.latest_success_at !== null &&
+              now - sqliteUtcMs(task.latest_success_at) <= HEALTH_SUCCESS_WINDOW_MS),
+        );
+      const lastSuccessfulAt =
+        taskHealth
+          .map((task) => task.latest_success_at)
+          .filter((value): value is string => value !== null)
+          .sort()
+          .at(-1) ?? null;
+
       return json(
         {
           service: "asset-tracker",
@@ -174,6 +203,7 @@ export default {
           time: new Date().toISOString(),
           todayKst: kstDate(),
           providers: listKnownProviders(),
+          lastSuccessfulAt,
           sync: last
             ? {
                 runId: last.run_id,

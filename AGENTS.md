@@ -65,12 +65,14 @@ Always run `pnpm test` and `pnpm typecheck` after changes.
 - Accounts opt out of trade sync with `meta.trades = false` (checked by
   `tradesEnabled` in `src/sync/orchestrator.ts`), so provider-agnostic code never
   hardcodes a broker's unsupported-endpoint error.
-- Scheduled runs are split by account product (`productOf` / `SyncOptions.products`):
-  the KRX run (`stock`+`gold`) fires at KST 20:30, and the US run (`us`) fires at
-  KST 07:00 after the US regular close. `src/index.ts` picks the date/`products`
-  from `controller.cron`; the US run uses the **ET** session date (`etDate`), not KST.
+- All crons run **daily** (weekends included). Runs are split by account product
+  (`productOf` / `SyncOptions.products`): the KRX run (`stock`+`gold`) fires at
+  KST 20:30, and the US run (`us`) fires at KST 07:00 after the US regular close.
+  `src/index.ts` picks the date/`products` from `controller.cron`; the US run uses
+  the **ET** session date (`etDate`), not KST. Snapshots (`account_snapshots`/
+  `holdings`) are stored every day; `price_daily`/`fx_rates` keep business days only.
 - FX is a **separate task** (`src/sync/fx.ts`, `syncFxRates`) stored in `fx_rates`.
-  It runs on its own cron at **KST Mon-Fri 12:00** (UTC `0 3 * * 2-6`, after Korea
+  It runs on its own cron at **KST daily 12:00** (UTC `0 3 * * *`, after Korea
   Eximbank publishes ~11:00) and via `POST /sync/fx`; its failure never affects a
   holdings snapshot. The source is **Korea Eximbank's 매매기준율** (`deal_bas_r`) in
   `src/fx/koreaexim.ts`, implementing the market-data `FxSource` — **not** a
@@ -134,6 +136,11 @@ fixtures, or commit messages/history. See `SECURITY.md` for the full policy.
   lowercase response context fields (`ctx_area_fk100`), while requests send
   uppercase params (`CTX_AREA_FK100`).
 - Account numbers are strings with leading zeros (`ACNT_PRDT_CD = "01"`).
+- `account_snapshots` deposits are settlement-dated: `deposit_total` = D+0 (settled),
+  `next_day_settlement` = D+1, `settlement_deposit` = D+2 (KIS `prvs_rcdl_excc_amt`,
+  Kiwoom `d2_entra`; null for gold/US/Toss). Equity settlement is T+2, so a buy reduces
+  D+0 only on the settlement day while D+2 reflects it immediately — pair
+  `settlement_deposit` with same-day holdings, not `deposit_total`.
 - Trade history keeps only buys/sells with `tot_ccld_qty > 0`.
 - KIS tokens are bound to the issuing app key, so the token cache key must
   include a per-credential id (`kis:token:<env>:<credentialId>`, a short
@@ -169,9 +176,10 @@ fixtures, or commit messages/history. See `SECURITY.md` for the full policy.
   trades carry an exchange, so quotes resolve `stex_tp` (`ND`/`NY`/`NA`) via
   `usa10098` first (a `ND` guess fails with `1903` for NYSE/AMEX names). The US
   run fires at KST 07:00, which is still after-hours, so holdings are re-valued
-  at the regular-session close (candle `dt == date`) instead of the broker's
-  `now_pric`. Never run US tickers through `stripSymbol`: 7-char tickers
-  starting with `A`/`J`/`Q` would be truncated.
+  at the most recent regular-session close at or before `date` (candle `dt <= date`;
+  non-trading days reuse the last close) instead of the broker's `now_pric`. Never
+  run US tickers through `stripSymbol`: 7-char tickers starting with `A`/`J`/`Q`
+  would be truncated.
 - Verified live (2026-09-20): `ust21100` requires `krw_repl_skip_yn` (send `"N"`;
   the spec marks it optional but the API returns `1511` without it), and
   `usa06012`'s `strt_dt` is an **inclusive base date** (candles come back
@@ -179,7 +187,7 @@ fixtures, or commit messages/history. See `SECURITY.md` for the full policy.
   lookback window silently comes back empty.
 - FX comes from **Korea Eximbank's 매매기준율** (`src/fx/koreaexim.ts`,
   `data=AP01`, `deal_bas_r`), not a broker. It is published ~11:00 KST on business
-  days, so the FX cron runs KST 12:00 (UTC `0 3 * * 2-6`) and the source searches
+  days, so the FX cron runs KST 12:00 daily (UTC `0 3 * * *`) and the source searches
   back up to 7 days when a date has no data. The authkey goes in the query string
   (`KOREAEXIM_API_KEY`); never log the full URL. `result` codes: 2=data, 3=auth,
   4=daily quota. Only USD→KRW is mapped. FX runs are recorded in `sync_runs` with

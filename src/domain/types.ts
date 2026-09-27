@@ -43,6 +43,8 @@ export interface BalanceSummary {
   currency: Currency;
   depositTotal: number | null;
   nextDaySettlement: number | null;
+  /** D+2 (settlement-inclusive) deposit; null when the broker doesn't expose it. */
+  settlementDeposit: number | null;
   totalEvalAmount: number | null;
   securitiesEvalAmount: number | null;
   purchaseAmountTotal: number | null;

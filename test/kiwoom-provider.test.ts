@@ -75,7 +75,7 @@ function createProvider(relaySecret?: string) {
         ],
       });
     }
-    if (apiId === "kt00001") return jsonResponse({ return_code: 0, entr: "500", d1_entra: "490" });
+    if (apiId === "kt00001") return jsonResponse({ return_code: 0, entr: "500", d1_entra: "490", d2_entra: "480" });
     if (apiId === "kt00015") {
       return jsonResponse({
         return_code: 0,
@@ -277,6 +277,7 @@ describe("KiwoomProvider", () => {
 
     expect(result.date).toBe("2026-09-20");
     expect(result.summary.depositTotal).toBe(500);
+    expect(result.summary.settlementDeposit).toBe(480);
     expect(result.summary.totalEvalAmount).toBe(1100);
     expect(result.holdings).toHaveLength(1);
     expect(result.holdings[0]).toMatchObject({ symbol: "005930", quantity: 10, currentPrice: 110 });
@@ -380,6 +381,15 @@ describe("KiwoomProvider", () => {
     expect(ids).toContain("usa10098");
     expect(ids).toContain("usa06012");
     expect(ids).not.toContain("kt00018");
+  });
+
+  it("reuses the last regular-session close when the date has no candle", async () => {
+    const { provider } = createProvider();
+
+    const result = await provider.getBalance(usAccount("12345678", "12345678"), "2026-09-22");
+
+    expect(result.holdings[0]).toMatchObject({ market: "US", symbol: "AAPL", currentPrice: 270 });
+    expect(result.holdings[0]?.evalAmount).toBeCloseTo(395 * 270, 5);
   });
 
   it("fetches US fills via ust21100", async () => {

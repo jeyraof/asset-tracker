@@ -51,6 +51,7 @@ function mapGoldSummary(
     currency: KRW,
     depositTotal: num(body.tot_entr),
     nextDaySettlement: null,
+    settlementDeposit: null,
     totalEvalAmount,
     securitiesEvalAmount: totalEvalAmount,
     purchaseAmountTotal: num(body.tot_book_amt2),

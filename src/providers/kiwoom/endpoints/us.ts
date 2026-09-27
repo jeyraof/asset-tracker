@@ -51,7 +51,9 @@ export function mapUsHolding(raw: KiwoomUsHoldingRaw): HoldingSnapshot | null {
 
 /**
  * Re-values a holding at the regular-session close, so a snapshot taken during
- * US after-hours (KST morning) is still pinned to the official close.
+ * US after-hours (KST morning) is still pinned to the official close. On
+ * non-trading days `close` is the last regular-session close at or before the
+ * snapshot date.
  */
 function applyRegularClose(holding: HoldingSnapshot, close: number | null): HoldingSnapshot {
   if (close === null || holding.quantity <= 0) return holding;
@@ -85,6 +87,7 @@ function mapUsSummary(
       currency: USD,
       depositTotal: null,
       nextDaySettlement: null,
+      settlementDeposit: null,
       totalEvalAmount: num(body.tot_evlt_amt),
       securitiesEvalAmount: num(body.tot_evlt_amt),
       purchaseAmountTotal: num(body.tot_prch_amt),
@@ -99,6 +102,7 @@ function mapUsSummary(
     currency: USD,
     depositTotal: null,
     nextDaySettlement: null,
+    settlementDeposit: null,
     totalEvalAmount,
     securitiesEvalAmount: totalEvalAmount,
     purchaseAmountTotal: sumOrNull(holdings.map((holding) => holding.purchaseAmount)),
@@ -110,8 +114,9 @@ function mapUsSummary(
 
 /**
  * Maps a US ledger balance (ust21070) to the normalized model. When `closeFor`
- * is provided, each holding is re-valued at the regular-session close for
- * `date` (falling back to the broker's `now_pric` when no candle exists).
+ * is provided, each holding is re-valued at the most recent regular-session
+ * close at or before `date` (falling back to the broker's `now_pric` when no
+ * candle exists).
  */
 export function mapUsBalance(
   body: KiwoomUsBalanceResponse,

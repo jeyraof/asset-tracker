@@ -59,7 +59,8 @@ sync 엔진을 건드리지 않고 broker/국가를 추가할 수 있다.
   `meta.product="us"`). 엔드포인트 `ust21070`(원장잔고), `ust21100`(거래내역),
   `usa06012`(일봉), `usa10098`(거래소 ND/NY/NA). 경로 `/api/us/*`, 목록 키 `result_list`.
   - KST 07:00 실행은 미국 정규장 이후지만 시간외 구간이라, 보유평가를 `usa06012` 정규장
-    종가(캔들 `dt == date`)로 재계산한다.
+    종가(캔들 `dt <= date` 중 최근)로 재계산한다. 비거래일(주말·휴장일)은 그 날짜 캔들이
+    없어 직전 정규장 종가로 고정된다.
   - `ust21100`은 `krw_repl_skip_yn="N"`이 실제로 필수(`1511`), `usa06012`의 `strt_dt`는
     **기준일(포함)**이라 `from`이 아니라 `date`를 보낸다(아니면 구간이 조용히 빈다).
   - 소수점(소수점매매) 보유는 REST 미지원(`poss_qty`는 정수). 소수점 수량은 체결
@@ -97,7 +98,7 @@ sync 엔진을 건드리지 않고 broker/국가를 추가할 수 있다.
 ### FX (한국수출입은행)
 
 - **별개 태스크**: `src/sync/fx.ts`(`syncFxRates`)가 조회·보관을 담당한다. 자체 크론
-  **KST 월–금 12:00**(UTC `0 3 * * 2-6`)으로 돌고 `POST /sync/fx`로 수동 실행할 수 있다.
+  **KST 매일 12:00**(UTC `0 3 * * *`)으로 돌고 `POST /sync/fx`로 수동 실행할 수 있다.
   보유와 무관하며, 실패해도 스냅샷에 영향을 주지 않는다. FX 런도 **통합 런 이력**에
   기록된다(`sync_runs` `task='fx'`, `provider='koreaexim'`; 오류는 `sync_errors`).
 - **출처**: 한국수출입은행 Open API(`src/fx/koreaexim.ts`)의 **매매기준율**
@@ -179,16 +180,24 @@ sync 엔진은 `BrokerProvider` 인터페이스만 알기 때문에, 새 broker�
 | `sync_runs` | run | 통합 실행 이력 (`task`=`sync`\|`fx`; `provider`=broker id 또는 fx 소스 id) |
 | `sync_errors` | run + scope | 런별 구조화 오류(status/attempts/symbol 등) |
 
+`account_snapshots`의 예수금은 결제 주기별로 세 값을 구분한다: `deposit_total`(D+0,
+결제 반영 예수금), `next_day_settlement`(D+1), `settlement_deposit`(D+2). 주식 결제가
+**T+2**라 매수 당일에는 D+0이 줄지 않고, `settlement_deposit`(D+2)이 즉시 반영된다
+(KIS `prvs_rcdl_excc_amt`, Kiwoom `d2_entra`; 금현물·US·Toss는 `null`). 소비처는 "현금"으로
+`settlement_deposit`을 읽고 `null`이면 `deposit_total`로 폴백한다. `net_asset_amount`(순자산)는
+항상 정확하다.
+
 ## Cloudflare 리소스
 
 - Worker: `asset-tracker`
 - D1: `asset-tracker-db` (binding `DB`) — `<d1-database-id>`
 - KV: `asset-tracker-kv` (binding `CACHE`) — `<kv-namespace-id>`
-- Cron:
-  - `30 11 * * 2-6` (UTC Mon-Fri 11:30 = KST Mon-Fri 20:30) — KRX/금
-  - `0 22 * * 2-6` (UTC Mon-Fri 22:00 = KST Tue-Sat 07:00) — US
-  - `0 3 * * 2-6` (UTC Mon-Fri 03:00 = KST Mon-Fri 12:00) — FX
-  - Cloudflare는 Quartz 요일(1=일 … 7=토)이라 Mon–Fri는 `2-6`.
+- Cron (매일 실행, 주말 포함):
+  - `30 11 * * *` (UTC 11:30 = KST 20:30) — KRX/금
+  - `0 22 * * *` (UTC 22:00 = KST 익일 07:00) — US
+  - `0 3 * * *` (UTC 03:00 = KST 12:00) — FX
+  - 스냅샷(`account_snapshots`/`holdings`)은 매일 저장하고, `price_daily`/`fx_rates`는
+    영업일 행만 유지한다(비거래일 평가는 직전 거래일 기준).
 
 `wrangler.jsonc`는 **gitignored**(계정별 id·프록시 호스트 보관)이고, 커밋 가능한 기본값은
 `wrangler.example.jsonc`에 있다.

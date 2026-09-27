@@ -107,13 +107,15 @@ export async function upsertAccountSnapshot(
     .prepare(
       `INSERT INTO account_snapshots (
          account_id, snapshot_date, currency, deposit_total, next_day_settlement,
-         total_eval_amount, securities_eval_amount, purchase_amount_total,
-         eval_pfls_amount, net_asset_amount, raw_json, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+         settlement_deposit, total_eval_amount, securities_eval_amount,
+         purchase_amount_total, eval_pfls_amount, net_asset_amount, raw_json,
+         updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
        ON CONFLICT (account_id, snapshot_date) DO UPDATE SET
          currency = excluded.currency,
          deposit_total = excluded.deposit_total,
          next_day_settlement = excluded.next_day_settlement,
+         settlement_deposit = excluded.settlement_deposit,
          total_eval_amount = excluded.total_eval_amount,
          securities_eval_amount = excluded.securities_eval_amount,
          purchase_amount_total = excluded.purchase_amount_total,
@@ -128,6 +130,7 @@ export async function upsertAccountSnapshot(
       summary.currency,
       summary.depositTotal,
       summary.nextDaySettlement,
+      summary.settlementDeposit,
       summary.totalEvalAmount,
       summary.securitiesEvalAmount,
       summary.purchaseAmountTotal,
@@ -457,6 +460,30 @@ export async function getLatestSyncRun(db: D1Database): Promise<SyncRunRow | nul
     )
     .first<SyncRunRow>();
   return row ?? null;
+}
+
+export interface SyncTaskHealth {
+  task: string;
+  latest_status: string;
+  latest_success_at: string | null;
+}
+
+/**
+ * Per-task health: each task's latest run status and its latest successful
+ * finish time, so `/health` can tolerate an isolated non-success run.
+ */
+export async function getRunHealthByTask(db: D1Database): Promise<SyncTaskHealth[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT r.task AS task,
+              r.status AS latest_status,
+              (SELECT MAX(s.finished_at) FROM sync_runs s
+                WHERE s.task = r.task AND s.status = 'success') AS latest_success_at
+         FROM sync_runs r
+        WHERE r.id IN (SELECT MAX(id) FROM sync_runs GROUP BY task)`,
+    )
+    .all<SyncTaskHealth>();
+  return results ?? [];
 }
 
 export async function getSyncRun(db: D1Database, runId: string): Promise<SyncRunRow | null> {

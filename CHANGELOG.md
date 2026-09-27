@@ -3,6 +3,29 @@
 `asset-tracker`의 주요 변경 이력입니다. **최신 우선**. 과거 개발 메모를 그대로
 보존합니다(당시 기준의 수치 포함).
 
+## 2026-09-27 — D+2 예수금(`settlement_deposit`) 추가
+
+- `account_snapshots`에 `settlement_deposit`(D+2 결제 반영 예수금) 컬럼 추가(마이그레이션
+  `0008`) 및 `raw_json` 기반 백필. 기존 `deposit_total`(D+0)은 유지.
+- 매핑: KIS 국내 `prvs_rcdl_excc_amt`, Kiwoom 국내 `d2_entra`; 금현물·US·Toss는 `null`.
+- 배경: 주식 결제가 T+2라 매수 당일엔 D+0 예수금이 줄지 않는다. 소비처는 "현금"으로
+  `settlement_deposit`을 읽고 `null`이면 `deposit_total`로 폴백하면 `예수금+증권=순자산`이 정합.
+- Kiwoom `d2_entra`는 문서 근거로 선반영했고, 다음 실거래(미결제) 스냅샷에서 `entr`(D+0) 대비
+  분기를 관측해 확정한다.
+- `pnpm test` 141 passed, `pnpm typecheck` 통과.
+
+## 2026-09-27 — 크론 매일화·비거래일 종가·헬스 완화
+
+- 3개 크론(KRX `30 11`, US `0 22`, FX `0 3`)을 모두 **매일 실행**(`* * *`)으로 변경.
+  주말·휴장일에도 스냅샷(`account_snapshots`/`holdings`)을 저장하고, `price_daily`/
+  `fx_rates`는 영업일 행만 유지한다(비거래일 평가는 직전 거래일 기준). `src/index.ts`의
+  `US_CRON`/`FX_CRON` 상수도 동일 문자열로 갱신.
+- 키움 US 보유평가를 `dt == date` 대신 **`dt <= date` 중 최근 정규장 종가**로 재계산해,
+  주말·휴장일 스냅샷이 직전 정규장 종가로 고정되도록 수정.
+- `/health`를 **태스크별 최근 성공 런(36h 창)** 기준으로 판정하도록 변경. 단일
+  non-success 런(비거래일 등)은 통과시키고 지속 실패만 503. 응답에 `lastSuccessfulAt` 추가.
+- `pnpm test` 141 passed, `pnpm typecheck` 통과.
+
 ## 2026-09-25 — 통합 런 이력 (FX 포함)
 
 - `sync_runs.task` 추가(마이그레이션 `0007`): `'sync'`(증권사) / `'fx'`. `provider`

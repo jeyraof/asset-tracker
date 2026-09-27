@@ -27,6 +27,7 @@ describe("mapDomesticBalance", () => {
           {
             dnca_tot_amt: "1,000,000",
             nxdy_excc_amt: "900000",
+            prvs_rcdl_excc_amt: "850000",
             tot_evlu_amt: "1,750,000",
             scts_evlu_amt: "750000",
             pchs_amt_smtl_amt: "700000",
@@ -40,6 +41,7 @@ describe("mapDomesticBalance", () => {
 
     expect(result.date).toBe("2026-09-20");
     expect(result.summary.depositTotal).toBe(1000000);
+    expect(result.summary.settlementDeposit).toBe(850000);
     expect(result.summary.totalEvalAmount).toBe(1750000);
     expect(result.holdings).toHaveLength(1);
     expect(result.holdings[0]).toMatchObject({

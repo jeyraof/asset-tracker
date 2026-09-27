@@ -45,6 +45,7 @@ function mapSummary(raw: KisDomesticSummaryRaw | undefined): BalanceSummary {
     currency: KRW,
     depositTotal: num(raw?.dnca_tot_amt),
     nextDaySettlement: num(raw?.nxdy_excc_amt),
+    settlementDeposit: num(raw?.prvs_rcdl_excc_amt),
     totalEvalAmount: num(raw?.tot_evlu_amt),
     securitiesEvalAmount: num(raw?.scts_evlu_amt),
     purchaseAmountTotal: num(raw?.pchs_amt_smtl_amt),

@@ -48,13 +48,14 @@ describe("mapDomesticBalance", () => {
           },
         ],
       },
-      { entr: "000000000017534", d1_entra: "000000000017450" },
+      { entr: "000000000017534", d1_entra: "000000000017450", d2_entra: "000000000017200" },
       "2026-09-20",
     );
 
     expect(result.date).toBe("2026-09-20");
     expect(result.summary.depositTotal).toBe(17534);
     expect(result.summary.nextDaySettlement).toBe(17450);
+    expect(result.summary.settlementDeposit).toBe(17200);
     expect(result.summary.totalEvalAmount).toBe(25789890);
     expect(result.summary.purchaseAmountTotal).toBe(17598258);
     expect(result.summary.evalPflsAmount).toBe(8138825);

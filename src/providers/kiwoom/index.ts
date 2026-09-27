@@ -69,6 +69,20 @@ const CALL_INTERVAL_MS = 300;
 /** How many days of daily candles to (re)load per instrument on each sync. */
 const QUOTE_LOOKBACK_DAYS = 7;
 
+/**
+ * The close of the most recent candle at or before `date`. Non-trading days have
+ * no candle of their own, so they reuse the last regular-session close rather
+ * than the broker's `now_pric` (which may include after-hours prints).
+ */
+function mostRecentCloseOnOrBefore(candles: readonly DailyQuote[], date: string): number | null {
+  let latest: DailyQuote | null = null;
+  for (const quote of candles) {
+    if (quote.date > date) continue;
+    if (latest === null || quote.date > latest.date) latest = quote;
+  }
+  return latest?.close ?? null;
+}
+
 export interface KiwoomProviderDeps {
   environment: KiwoomEnvironment;
   baseUrl: string;
@@ -203,7 +217,8 @@ export class KiwoomProvider implements BrokerProvider {
   /**
    * US balance (ust21070) re-valued at the regular-session close. The US market
    * is closed when this runs (KST morning), but after-hours trade may still be
-   * printing, so each holding is pinned to the official close from usa06012.
+   * printing, so each holding is pinned to the most recent regular-session close
+   * from usa06012 (at or before `date`, covering non-trading days).
    */
   private async usBalance(client: KiwoomClient, date: string): Promise<BalanceResult> {
     const holdings: KiwoomUsHoldingRaw[] = [];
@@ -228,7 +243,7 @@ export class KiwoomProvider implements BrokerProvider {
       const symbol = str(raw.stk_cd);
       if (!symbol || closeBySymbol.has(symbol)) continue;
       const candles = await this.fetchUsCandles(client, symbol, date);
-      const close = candles.find((quote) => quote.date === date)?.close ?? null;
+      const close = mostRecentCloseOnOrBefore(candles, date);
       if (close !== null) closeBySymbol.set(symbol, close);
     }
 

@@ -78,6 +78,7 @@ function mapSummary(
     currency: KRW,
     depositTotal: num(deposit.entr),
     nextDaySettlement: num(deposit.d1_entra),
+    settlementDeposit: num(deposit.d2_entra),
     totalEvalAmount,
     securitiesEvalAmount: totalEvalAmount,
     purchaseAmountTotal: num(balance.tot_pur_amt),

@@ -77,6 +77,7 @@ export function mapTossBalance(
     currency,
     depositTotal,
     nextDaySettlement: null,
+    settlementDeposit: null,
     // Toss omits a currency's totals when there are no holdings in that market;
     // store 0 so an existing account row still shows a value.
     totalEvalAmount: evalAmount ?? 0,
